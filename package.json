@@ -9,6 +9,7 @@
     "fixtures": "bun run scripts/fixtures.ts",
     "keys": "bun run scripts/keys.ts",
     "db:demo-admin": "bun run scripts/demo-admin.ts",
+    "db:demo-ledger": "bun run scripts/demo-ledger.ts",
     "sdn:update": "bun run scripts/sdn-update.ts",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",
