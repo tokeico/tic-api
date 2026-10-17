@@ -210,6 +210,7 @@ Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI
 
 The design means the cheapest option is always non-compliant somewhere:
 - **BR:** before Oct 1, PagaFX (`efx`) wins. Oct 1–30, PagaFX is blocked by BR-561-EFX and Ponte wins with a BR-VASP-UNFILED-WARN warning: it's operating but hasn't filed for BCB authorization, and the filing deadline is Oct 30. From Oct 31, Ponte is blocked by BR-VASP-AUTH (missed the deadline) and only Sol passes. That gives **three distinct routes** on the slider. Oct 30 is deliberately *not* a reroute date, because it's still a valid filing day ([RULES-SOURCES.md](./RULES-SOURCES.md) §6). Sol being "authorized" is hypothetical: no SPSAV had been authorized as of mid-October 2026.
+- **Presenter wording:** “Oct 31: providers that didn't file drop out.” This is Corredor's non-filer cutoff, not the end of permission for timely applicants to operate while authorization is pending.
 - **MX:** Banco Azul is always blocked, so Puente is chosen. Puente's type id is `nonbank_licensed`, but describe it as a **SAT-registered** virtual-asset platform: Mexico has no crypto license.
 - **AR:** Cueva is blocked, so Pampa is chosen.
 

@@ -42,6 +42,7 @@ Status key: **Decided** · **Open** (needs a call) · **Superseded**
 ### D8. The demo centerpiece is the rule-change moment. **Decided**
 - Drag the as-of date Sep 30 → Oct 1 → Oct 31 and the route changes on screen, naming the rule that caused it (BR-561-EFX, then BR-VASP-AUTH). None of the competitors shows this.
 - On stage, Oct 30 is the deadline to **file** for BCB authorization, not to be authorized. Use the wording in RULES-SOURCES.md §8.
+- Label the Oct 31 tour step “providers that didn't file drop out,” not “transition ended” or “authorized VASP.” After payment, reconcile Brazil and show the matched Ledger entry before the fraud example.
 
 ## Stack
 
