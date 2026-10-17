@@ -3,9 +3,10 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "test": "bun test",
-    "check": "bun check src/index.ts src/services/payouts.ts src/services/demo.ts src/corredor/index.ts src/db/seed.ts scripts/fixtures.ts scripts/keys.ts scripts/sdn-update.ts",
+    "check": "bun check src/index.ts src/services/payouts.ts src/services/demo.ts src/corredor/index.ts src/db/seed.ts scripts/fixtures.ts scripts/keys.ts scripts/sdn-update.ts scripts/demo-admin.ts",
     "fixtures": "bun run scripts/fixtures.ts",
     "keys": "bun run scripts/keys.ts",
+    "db:demo-admin": "bun run scripts/demo-admin.ts",
     "sdn:update": "bun run scripts/sdn-update.ts",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",

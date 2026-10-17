@@ -10,6 +10,9 @@ export const WEB_ORIGIN = new URL(process.env.WEB_ORIGIN ?? "http://localhost:80
 export const SECURE_COOKIE = process.env.NODE_ENV === "production" || WEB_ORIGIN.startsWith("https://");
 export const SESSION_COOKIE = SECURE_COOKIE ? "__Host-corredor_session" : "corredor_session";
 export const SESSION_SECONDS = 60 * 60 * 24 * 7;
+/** Local demo login: created only by scripts/demo-admin.ts, which refuses non-local databases. */
+export const DEMO_ADMIN_USERNAME = "admin";
+export const DEMO_ADMIN_EMAIL = "admin@corredor.demo";
 export const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 export const newToken = (prefix: string) => prefix + randomBytes(32).toString("base64url");
 const passwordOptions = { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 } as const;

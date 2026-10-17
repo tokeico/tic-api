@@ -4,11 +4,13 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { adminDb, schema } from "../db";
 import { ApiError } from "../http-error";
-import { createInvitation, issueSession, newToken, principalFor, publicUser, rateLimit, SECURE_COOKIE, SESSION_COOKIE, SESSION_SECONDS, signIn, signUp, tokenHash } from "../security/auth";
+import { createInvitation, DEMO_ADMIN_EMAIL, DEMO_ADMIN_USERNAME, issueSession, newToken, principalFor, publicUser, rateLimit, SECURE_COOKIE, SESSION_COOKIE, SESSION_SECONDS, signIn, signUp, tokenHash } from "../security/auth";
 import { requirePrincipal } from "../security/middleware";
 
 const email = z.string().trim().toLowerCase().email().max(254);
 const credentials = z.object({ email, password: z.string().min(1).max(128), invitation: z.string().regex(/^ci_[A-Za-z0-9_-]{43}$/).optional() });
+// Sign-in also takes the bare username "admin" for the local demo login (scripts/demo-admin.ts).
+const login = z.string().trim().toLowerCase().transform((v) => (v === DEMO_ADMIN_USERNAME ? DEMO_ADMIN_EMAIL : v)).pipe(email);
 const registration = credentials.extend({
   name: z.string().trim().min(1).max(80),
   password: z.string().min(15, "Use at least 15 characters.").max(128),
@@ -48,7 +50,7 @@ authRoutes.post("/signup", async (c) => {
 });
 
 authRoutes.post("/signin", async (c) => {
-  const input = await body(c, credentials);
+  const input = await body(c, credentials.extend({ email: login }));
   await rateLimit(`signin:email:${input.email}`, 10, 15 * 60_000);
   return c.json(await establishSession(c, await signIn(input.email, input.password, input.invitation)));
 });
