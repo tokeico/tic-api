@@ -112,3 +112,10 @@ bun --hot ./index.ts
 ```
 
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+
+## Database
+
+PostgreSQL + Drizzle ORM (`drizzle-orm/bun-sql`, which uses `Bun.SQL`), run with Docker Compose.
+**Read `DATABASE.md` before touching the schema, migrations or deployment.**
+Short version: edit `src/db/schema.ts`, run `bun run db:generate`, run `bun run db:migrate`, then commit `drizzle/`.
+Import `db` from `src/db`. Never use `db:push` against shared or production databases.
