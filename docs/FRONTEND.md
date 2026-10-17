@@ -62,7 +62,7 @@ States: empty ("Drop an invoice or load the demo set"), loading skeletons, API e
 
 | Component | Data | Behavior |
 |---|---|---|
-| `ApprovalPanel` | `approvals[]`, policy | Approve or Reject. Above $50k it shows "1 of 2 approvals" and needs a second, different approver (pick a name from a demo dropdown: Maria Lopez / Daniel Ortiz). |
+| `ApprovalPanel` | `approvals[]`, policy | Approve or Reject. Above $50k it shows "1 of 2 approvals" and needs a second, different approver (pick a name from a demo dropdown: Maria Torres / Daniel Reyes, the seeded controller and approver. The API accepts a name, email or id). |
 | `PayButton` | status `approved` | `POST /api/payouts/:id/pay`, then shows the transaction hash, off-ramp reference and Pix/SPEI/CVU reference with copy buttons and a "simulated" tag |
 | `ReconcileButton` | status `paid` | `POST /api/payouts/:id/reconcile` → status `booked`, linking to the ledger |
 
@@ -97,6 +97,7 @@ Types come from `tic-api/src/contracts.ts` (ARCHITECTURE §5), copied to `tic-we
 | PATCH | `/api/payouts/:id` | `PayoutDetail` | Fields form |
 | POST | `/api/payouts/:id/plan?asOf=` | `PayoutDetail` | Detail refresh |
 | POST | `/api/plan-all?asOf=` | `{ payouts: PayoutSummary[], reroutes: Reroute[] }` | Slider |
+| POST | `/api/payouts/:id/screening-review` | `PayoutDetail` | Screening card ("Review match") |
 | POST | `/api/payouts/:id/approve` | `PayoutDetail` | Approval panel |
 | POST | `/api/payouts/:id/pay` | `PayoutDetail` (with `payment`) | Pay button |
 | POST | `/api/payouts/:id/reconcile` | `PayoutDetail` (with `journal`) | Reconcile |

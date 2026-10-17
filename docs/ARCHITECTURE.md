@@ -170,50 +170,50 @@ export type Memo = z.infer<typeof Memo>;
 
 Each rule = **when** (corridor + effective window) + **check** (named function plus params) + **outcome** + **source**.
 
-```jsonc
+```json
 [
   { "id": "BR-521-FX", "corridor": "BR", "title": "Stablecoin payment = FX operation",
     "effectiveFrom": "2026-02-02", "effectiveTo": null, "appliesTo": "stablecoin",
     "check": { "fn": "requireFields", "params": { "fields": ["purposeCode", "payeeTaxId"] } },
     "outcome": "require_fields",
-    "message": "Brazil treats stablecoin payments as FX: purpose code and counterparty data required.",
-    "source": { "name": "BCB Res. 521 (via fcm.law)", "url": "https://fcm.law/brazil-vasp-license/" } },
+    "message": "Brazil treats international payments with stablecoins as FX operations (Res. BCB 521, amending Res. 277): purpose code and counterparty data are required.",
+    "source": { "name": "BCB Res. 521/2025", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=521" } },
 
   { "id": "BR-521-CAP", "corridor": "BR", "title": "USD 100k cap per operation (standard VASP)",
     "effectiveFrom": "2026-02-02", "effectiveTo": null, "appliesTo": "stablecoin",
     "check": { "fn": "amountUsdAbove", "params": { "limit": 100000, "offrampTypes": ["vasp_authorized", "vasp_pending"] } },
-    "outcome": "block", "message": "Above the USD 100k per-operation cap for standard VASPs.",
-    "source": { "name": "Stablecoin Insider / BCB Res. 521", "url": "https://stablecoininsider.org/stablecoin-regulation-in-latin-america/" } },
+    "outcome": "block", "message": "Res. BCB 521 caps an international payment with virtual assets at USD 100k per transaction for VASPs (SPSAVs) when the counterparty isn't authorized in the FX market.",
+    "source": { "name": "BCB Res. 521/2025 (Res. 277, art. 29)", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=521" } },
 
   { "id": "BR-561-EFX", "corridor": "BR", "title": "eFX providers can't settle in stablecoins",
     "effectiveFrom": "2026-10-01", "effectiveTo": null, "appliesTo": "stablecoin",
     "check": { "fn": "offrampTypeIn", "params": { "types": ["efx"] } },
-    "outcome": "block", "message": "Since Oct 1, 2026, eFX providers may not settle overseas payments in stablecoins. Use an authorized VASP or bank.",
-    "source": { "name": "BCB Res. 561 (via Eco)", "url": "https://eco.com/support/en/articles/15575501-brazil-stablecoin-regulation-2026-what-drex-s-pivot-means-for-usdc-and-usdt-inflows" } },
+    "outcome": "block", "message": "Since Oct 1, 2026, eFX providers may not use virtual assets to settle with their foreign counterparties (Res. BCB 561, art. 50). Use an authorized VASP or a bank.",
+    "source": { "name": "BCB Res. 561/2026", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=561" } },
 
   { "id": "BR-VASP-PENDING-WARN", "corridor": "BR", "title": "Off-ramp authorization still pending",
     "effectiveFrom": "2026-02-02", "effectiveTo": "2026-10-29", "appliesTo": "stablecoin",
     "check": { "fn": "offrampTypeIn", "params": { "types": ["vasp_pending"] } },
-    "outcome": "warn", "message": "Off-ramp's BCB authorization is pending; it must be authorized by Oct 30, 2026.",
-    "source": { "name": "fcm.law", "url": "https://fcm.law/brazil-vasp-license/" } },
+    "outcome": "warn", "message": "Off-ramp's BCB authorization is pending. Incumbent VASPs had to file by Oct 30, 2026 (Res. BCB 520, art. 88); from Nov 6, 2026 Brazilian banks and payment institutions may not deal with unauthorized VASPs (Res. BCB 589).",
+    "source": { "name": "BCB Res. 520/2025, art. 88", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=520" } },
 
-  { "id": "BR-VASP-AUTH", "corridor": "BR", "title": "VASP authorization transition ends Oct 30",
+  { "id": "BR-VASP-AUTH", "corridor": "BR", "title": "Unauthorized VASPs excluded (pack policy)",
     "effectiveFrom": "2026-10-30", "effectiveTo": null, "appliesTo": "stablecoin",
     "check": { "fn": "offrampTypeIn", "params": { "types": ["vasp_pending"] } },
-    "outcome": "block", "message": "Off-ramp is not BCB-authorized after the transition period.",
-    "source": { "name": "fcm.law", "url": "https://fcm.law/brazil-vasp-license/" } },
+    "outcome": "block", "message": "Off-ramp is not BCB-authorized. Oct 30, 2026 is the filing deadline for incumbent VASPs (Res. BCB 520, art. 88); this pack stops routing to unauthorized VASPs from that date, ahead of the Nov 6 bank cut-off (Res. BCB 589).",
+    "source": { "name": "BCB Res. 520/2025, art. 88", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=520" } },
 
   { "id": "MX-BANK-CRYPTO", "corridor": "MX", "title": "Banks may not operate with crypto",
-    "effectiveFrom": "2019-03-08", "effectiveTo": null, "appliesTo": "stablecoin",
+    "effectiveFrom": "2019-03-09", "effectiveTo": null, "appliesTo": "stablecoin",
     "check": { "fn": "offrampTypeIn", "params": { "types": ["bank"] } },
-    "outcome": "block", "message": "Mexican banks may not operate with crypto. Use a licensed non-bank off-ramp.",
-    "source": { "name": "iProUP (Banxico/CNBV reminder, 2026)", "url": "https://www.iproup.com/economia-digital/67728-bitcoin-bancos-mexicanos-sigue-prohibido-acceder-legalmente-mayo-2026" } },
+    "outcome": "block", "message": "Mexican banks may not offer clients crypto exchange, transmission or custody (Banxico Circular 4/2019, in force Mar 9, 2019; reaffirmed by the CNBV in May 2026). Use a licensed non-bank off-ramp.",
+    "source": { "name": "Banxico Circular 4/2019", "url": "https://www.banxico.org.mx/regulations-and-supervision/normative-issued-by-banco-de-mexico/circular-4-2019/%7B7C7FB718-13FA-2017-D6A3-C81DE3679CED%7D.pdf" } },
 
   { "id": "AR-PSAV", "corridor": "AR", "title": "Ramps must be registered PSAVs",
-    "effectiveFrom": null, "effectiveTo": null, "appliesTo": "stablecoin",
+    "effectiveFrom": "2024-03-25", "effectiveTo": null, "appliesTo": "stablecoin",
     "check": { "fn": "offrampTypeIn", "params": { "types": ["p2p_unregistered"] } },
-    "outcome": "block", "message": "Argentine banks can't touch crypto. Ramps must be CNV-registered PSAVs.",
-    "source": { "name": "Stablecoin Insider", "url": "https://stablecoininsider.org/stablecoin-regulation-in-latin-america/" } },
+    "outcome": "block", "message": "Virtual-asset service providers must be registered with the CNV (RG 994/2024, in force Mar 25, 2024). Argentine banks still can't offer crypto (BCRA Com. A 7506). Use a registered PSAV.",
+    "source": { "name": "CNV RG 994/2024 (Boletín Oficial)", "url": "https://www.boletinoficial.gob.ar/detalleAviso/primera/305110/20240325" } },
 
   { "id": "AR-FX-SPREAD", "corridor": "AR", "title": "Official vs. parallel FX gap",
     "effectiveFrom": null, "effectiveTo": null, "appliesTo": "any",
@@ -229,7 +229,7 @@ Each rule = **when** (corridor + effective window) + **check** (named function p
 ]
 ```
 
-⚠ **Verify before the pitch:** the BR rows against the BCB resolutions; the MX effective date (Banxico Circular 4/2019); and the date of the AR PSAV registry. Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI.
+**Verified Oct 17, 2026 against primary texts** (BCB Res. 520, 521, 561 and 589; Banxico Circular 4/2019; CNV RG 994/2024; OFAC). Corrections made: MX effective Mar 9, 2019 (the day after the Mar 8 publication); AR-PSAV effective Mar 25, 2024; BR messages and sources now cite the BCB resolutions. **One deliberate simplification remains:** Oct 30, 2026 is the *filing* deadline for incumbent VASPs (Res. 520, art. 88), not the end of their right to operate. Filers may continue until the BCB decides, and the bank cut-off is Nov 6, 2026 (Res. 589). BR-VASP-AUTH keeps the Oct 30 date so the demo reroutes, and its message says so. Moving it to 2026-11-06 is the legally closer choice (see DECISIONS D5). Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI.
 
 **Check functions** (`checks.ts`): `always`, `offrampTypeIn(types)`, `amountUsdAbove(limit, offrampTypes?)`, `requireFields(fields)`, `fxSpreadAbove(pct, pair)`. Each is pure: `(ctx: { invoice, route, fx }) => boolean | { missing: string[] }`.
 
@@ -302,16 +302,17 @@ export async function chatJSON<T extends z.ZodType>(schema: T, system: string, u
 
 ## 9. API (Hono, `tic-api/src/routes`)
 
-`app.use("*", cors({ origin: process.env.WEB_ORIGIN ?? "http://localhost:8080" }))`. Request bodies are validated with `zValidator`. Errors come back as `{ error: { code, message } }`.
+`app.use("*", cors({ origin: process.env.WEB_ORIGIN ?? "http://localhost:8080" }))`. Request bodies are validated with zod (`safeParse`, no extra dependency). Errors come back as `{ error: { code, message } }`.
 
 | Method | Route | Does |
 |---|---|---|
 | GET | `/api/payouts` · `/api/payouts/:id` | `PayoutSummary[]` · `PayoutDetail` |
 | POST | `/api/invoices` | multipart PDF → text → extract → create payout (`draft`) → plan |
-| PATCH | `/api/payouts/:id` | edit invoice fields → re-plan |
+| PATCH | `/api/payouts/:id` | edit invoice fields → re-plan. A failed checksum puts the field back in `lowConfidence`. Approved payouts are frozen (409 `plan_locked`) |
 | POST | `/api/payouts/:id/plan?asOf=` | screen + quote + rules → `Plan`, then memo |
 | POST | `/api/plan-all?asOf=` | re-plan all open payouts → `{ payouts, reroutes }` (the slider calls this) |
-| POST | `/api/payouts/:id/approve` | `{ approver }`; second approval if over the cap |
+| POST | `/api/payouts/:id/screening-review` | `{ reviewer, decision, note }`: a person clears or confirms a sanctions match (controller / approver only) |
+| POST | `/api/payouts/:id/approve` | `{ approver, decision?, comment? }`; `approver` is a user id, name or email; second approval if over the cap |
 | POST | `/api/payouts/:id/pay` | `RailAdapter.send(recommended)` |
 | POST | `/api/payouts/:id/reconcile` | match → journal entry |
 | GET | `/api/ledger` · `/api/ledger.csv` | journal entries · CSV export |

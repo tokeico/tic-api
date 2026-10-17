@@ -1,7 +1,7 @@
 // Resets the database to the demo state from the spec (PRD §10):
 // 4 demo users, the 4 demo invoices with draft payouts, and default settings.
 // Everything else is cleared, including the audit log. extraction_cache is
-// kept so cached Claude extractions survive a reset.
+// kept so cached extractions survive a reset.
 //
 // Usage: bun run db:seed
 // Refuses to run against a non-local DATABASE_URL unless SEED_ALLOW_REMOTE=1.
@@ -35,18 +35,22 @@ const policy: Policy = DEFAULT_POLICY;
 
 await db.transaction(async (tx) => {
   await tx.execute(sql`
-    TRUNCATE audit_events, journal_lines, journal_entries, reconciliations,
+    TRUNCATE audit_events, audit_checkpoints, journal_lines, journal_entries, reconciliations,
              payments, approvals, vendor_requests, memos, plans, screenings,
              payouts, invoices, users, settings
     RESTART IDENTITY CASCADE`);
 
   await tx.insert(users).values([...demoUsers]);
 
+  // now() is the transaction start, so give each row its own millisecond:
+  // the inbox lists payouts in the PRD §10 order (BR, MX, AR, VE).
+  const base = Date.now();
   const rows = await tx
     .insert(invoices)
-    .values(demoInvoices.map((i) => ({ ...i, source: "seed" as const, extractionSource: "seed" as const })))
-    .returning({ id: invoices.id });
-  await tx.insert(payouts).values(rows.map((r) => ({ invoiceId: r.id })));
+    .values(demoInvoices.map((i, n) => ({ ...i, source: "seed" as const, extractionSource: "seed" as const, createdAt: new Date(base + n) })))
+    .returning({ id: invoices.id, invoiceNumber: invoices.invoiceNumber });
+  const order = new Map(demoInvoices.map((i, n) => [i.invoiceNumber, n]));
+  await tx.insert(payouts).values(rows.map((r) => ({ invoiceId: r.id, createdAt: new Date(base + order.get(r.invoiceNumber)!) })));
 
   await tx.insert(settings).values([
     { key: "policy", value: policy },

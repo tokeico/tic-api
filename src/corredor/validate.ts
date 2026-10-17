@@ -1,5 +1,5 @@
 // Field validation for extracted / edited invoices (PRD 8.1 P1).
-// Checksums for CLABE, CNPJ, CVU and CUIT; formats for the rest.
+// Checksums for CLABE, CNPJ (numeric and alphanumeric), CVU and CUIT; formats for the rest.
 // Extraction uses these to override the model, and PATCH uses them to warn.
 
 import type { Invoice } from "../contracts";
@@ -16,13 +16,18 @@ export function isValidClabe(value: string): boolean {
   return (10 - (sum % 10)) % 10 === Number(d[17]);
 }
 
-/** Brazilian CNPJ: 14 digits with two mod-11 check digits. */
+/**
+ * Brazilian CNPJ: 12 root characters + 2 mod-11 check digits. Since July 2026
+ * the Receita Federal issues alphanumeric CNPJs to new registrations (existing
+ * numeric ones stay valid). Each character counts as its ASCII code minus 48
+ * (0-9 → 0-9, A → 17 ... Z → 42); the two check digits are always numeric.
+ */
 export function isValidCnpj(value: string): boolean {
-  const d = onlyDigits(value);
-  if (!/^\d{14}$/.test(d) || /^(\d)\1{13}$/.test(d)) return false;
+  const d = onlyDigits(value).toUpperCase();
+  if (!/^[0-9A-Z]{12}\d{2}$/.test(d) || /^(.)\1{13}$/.test(d)) return false;
   const check = (len: number) => {
     const w = len === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-    const sum = w.reduce((s, wi, i) => s + wi * Number(d[i]), 0);
+    const sum = w.reduce((s, wi, i) => s + wi * (d.charCodeAt(i) - 48), 0);
     const r = sum % 11;
     return r < 2 ? 0 : 11 - r;
   };
@@ -92,7 +97,7 @@ export function validateInvoice(inv: Invoice): FieldIssue[] {
   if (inv.payeeTaxId) {
     const t = inv.payeeTaxId;
     const bad =
-      (inv.payeeCountry === "BR" && !isValidCnpj(t) && "CNPJ must be 14 digits with valid check digits") ||
+      (inv.payeeCountry === "BR" && !isValidCnpj(t) && "CNPJ must be 14 characters (digits, or letters since July 2026) with valid check digits") ||
       (inv.payeeCountry === "MX" && !isValidRfc(t) && "Not a valid RFC") ||
       (inv.payeeCountry === "AR" && !isValidCuit(t) && "CUIT must be 11 digits with a valid check digit") ||
       (inv.payeeCountry === "VE" && !isValidRif(t) && "Not a valid RIF");

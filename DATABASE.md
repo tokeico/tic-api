@@ -21,6 +21,17 @@ Read it before changing the schema or deploying.
 > because drizzle-kit can't use Bun's built-in client. App code must use `db` from `src/db`.
 > Never import `postgres` or `pg` yourself.
 
+## Tests that use the database
+
+`test/payouts.test.ts` runs the whole payout workflow over HTTP against a real Postgres. It wipes and reseeds the database named by `TEST_DATABASE_URL`, and refuses to run unless that name ends in `_test`, so it can never touch the demo data. One-time setup:
+
+```sh
+docker compose exec db psql -U tic -d postgres -c "CREATE DATABASE tic_test"
+DATABASE_URL=postgres://tic:tic@localhost:5432/tic_test bun run db:migrate
+```
+
+Without `TEST_DATABASE_URL`, that file is skipped and `bun test` still passes.
+
 ## Environment variables
 
 Copy `.env.example` to `.env`. Bun loads `.env` automatically, so you don't need `dotenv`. Never commit `.env`.
@@ -93,7 +104,8 @@ settings          key/value: policy, demo_as_of, rules_version
 | `payments` | `RailAdapter.send()` result | At most one non-`failed` payment per payout. `route` is a snapshot |
 | `reconciliations` | invoice ↔ tx hash ↔ rail ref | `exception` needs a `reason` |
 | `journal_entries` / `journal_lines` | Double-entry booking (USD) | A line is debit **or** credit (CHECK). The app must keep each entry balanced |
-| `audit_events` | Hash chain | `seq` is an identity. UPDATE/DELETE are rejected by a trigger (migration 0002). `created_at` has ms precision: set it in code before hashing |
+| `audit_events` | Keyed hash chain (HMAC-SHA-512) | `seq` is an identity, read before insert because it is part of the MAC (`appendAudit` in `src/services/audit-log.ts`). The columns `prev_hash` / `hash` hold the previous MAC / MAC. `key_id` supports rotation. UPDATE/DELETE are rejected by a trigger (migration 0002). `created_at` has ms precision: set it in code before MAC'ing |
+| `audit_checkpoints` | Ed25519 signatures over the head MAC | Written every 10 events and when a payout is booked. Auditors verify them with the public key alone |
 | `settings` | Config | `policy` = `{ secondApproverAboveUsd: 50000, dailyCapUsd: 150000 }` |
 
 Conventions: uuid PKs, snake_case columns, `timestamptz`, business dates as

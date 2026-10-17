@@ -203,11 +203,19 @@ export const Policy = z.object({
 export type Policy = z.infer<typeof Policy>;
 
 export const ApproveRequest = z.object({
-  approver: z.string().min(1), // user id
+  approver: z.string().min(1), // user id (a name or email also works; controller / approver roles only)
   decision: z.enum(["approved", "rejected"]).default("approved"),
   comment: z.string().optional(),
 });
 export type ApproveRequest = z.infer<typeof ApproveRequest>;
+
+/** POST /api/payouts/:id/screening-review. A possible match or hit blocks the payout until a person records this. */
+export const ScreeningReviewRequest = z.object({
+  reviewer: z.string().min(1), // user id, name or email (controller / approver only)
+  decision: z.enum(["cleared", "confirmed_hit"]),
+  note: z.string().min(1, "explain why"),
+});
+export type ScreeningReviewRequest = z.infer<typeof ScreeningReviewRequest>;
 
 // ---- Rails, reconciliation and books -------------------------------------------------
 

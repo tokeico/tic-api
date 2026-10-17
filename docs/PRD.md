@@ -98,12 +98,12 @@ Priority: **P0** must ship for the demo · **P1** strongly wanted · **P2** stre
 | BR-561-EFX | BR | 2026-10-01 | eFX providers may not settle overseas payments in stablecoins | `block` routes whose off-ramp is an eFX provider |
 | BR-VASP-PENDING-WARN | BR | 2026-02-02 → 2026-10-29 | Off-ramp authorization still pending | `warn` |
 | BR-VASP-AUTH | BR | 2026-10-30 | VASP authorization transition ends | `block` routes whose off-ramp isn't authorized |
-| MX-BANK-CRYPTO | MX | 2019 (Banxico Circular 4/2019, reaffirmed Jun 2026) ⚠ verify | Banks may not operate with crypto | `block` routes that off-ramp through a bank. A licensed non-bank is required. |
-| AR-PSAV | AR | CNV PSAV registry ⚠ verify date | Ramps must be registered PSAVs | `block` unregistered off-ramps (P2P desks) |
+| MX-BANK-CRYPTO | MX | 2019-03-09 (Banxico Circular 4/2019, reaffirmed by the CNBV May 2026) | Banks may not offer clients crypto exchange, transmission or custody | `block` routes that off-ramp through a bank. A licensed non-bank is required. |
+| AR-PSAV | AR | 2024-03-25 (CNV RG 994/2024) | Ramps must be registered PSAVs | `block` unregistered off-ramps (P2P desks) |
 | AR-FX-SPREAD | AR | — | Official vs. parallel exchange-rate gap | `warn` if the spread is over 5%, showing both rates |
 | VE-OFAC | VE | — | Venezuela sanctions program | `block` every route unless a named general license is recorded and a human signs off |
 
-> Have someone check the BR rows against the BCB resolutions before the pitch. Sources are listed in ARCHITECTURE.md §6.
+> Rule dates and sources were checked against the primary texts on Oct 17 (see DECISIONS D5). Have compliance review the BR-VASP rows before the pitch: Oct 30 is the VASP *filing* deadline and the bank cut-off is Nov 6. Sources are listed in ARCHITECTURE.md §6.
 
 ### 8.5 Memo
 - **P0** For each payout, the local Llama model writes a short memo covering what's being paid, the chosen route, why it complies (each rule cited with its source link), the warnings, and what a human should check. The model explains the engine's result and never overrides it. If the model is down, a template memo built from the rule messages is used.

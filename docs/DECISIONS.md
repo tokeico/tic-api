@@ -28,7 +28,8 @@ Status key: **Decided** · **Open** (needs a call) · **Superseded**
 ### D5. Rules pack v1: 9 rules, each with an effective date and source. **Decided**
 - BR-521-FX · BR-521-CAP · BR-561-EFX · BR-VASP-PENDING-WARN · BR-VASP-AUTH · MX-BANK-CRYPTO · AR-PSAV · AR-FX-SPREAD · VE-OFAC.
 - Labeled in the UI as "sourced · pending compliance review". It is not legal advice.
-- ⚠ **Open follow-up:** before the pitch, check the BR rows against the BCB resolutions, the MX date (Banxico Circular 4/2019) and the AR PSAV registry date.
+- **Verified Oct 17, 2026** against the primary texts (BCB Res. 520/521/561/589 via the BCB normative API, Banxico Circular 4/2019, CNV RG 994/2024, OFAC). Confirmed: BR-521-FX/CAP effective Feb 2, 2026 (USD 100k per transaction for SPSAVs when the counterparty isn't FX-authorized); BR-561-EFX effective Oct 1, 2026 (Res. 561, art. 50). Fixed: MX effective date (Mar 9, 2019), AR-PSAV date (Mar 25, 2024), messages and sources.
+- ⚠ **Open decision, BR-VASP-AUTH:** Oct 30, 2026 is the *filing* deadline for incumbent VASPs (Res. 520, art. 88). A VASP that filed may keep operating until the BCB decides, and as of Sep 2026 none had been authorized. What changes on **Nov 6, 2026** is that Brazilian banks and payment institutions can't deal with unauthorized VASPs (Res. 589 moved this from Oct 30). The pack keeps Oct 30 for the demo and says so in the rule message. To follow the law more closely, set `effectiveTo` of BR-VASP-PENDING-WARN to 2026-11-05 and `effectiveFrom` of BR-VASP-AUTH to 2026-11-06, add `2026-11-06` to `DEMO_DATES`, and update test/rules.test.ts.
 
 ### D6. Approval policy (a light version of Agent Passport). **Decided**
 - A second approver is required above **$50,000**. Daily cap is **$150,000**.
@@ -105,7 +106,7 @@ Status key: **Decided** · **Open** (needs a call) · **Superseded**
 
 | # | Item | Owner | When |
 |---|---|---|---|
-| D5 | Verify BR/MX/AR rule dates and sources | BE1 | Before 4:30 |
+| D5 | Decide whether BR-VASP-AUTH moves from Oct 30 to Nov 6 (dates and sources are otherwise verified) | BE1 + compliance | Before the pitch |
 | D10 | rsbuild vs. Vite | FE lead | Before the first integration checkpoint |
 | D14 | Bridge/BlindPay sandbox or mock | BE3 | 10:30 |
 | — | Write access for `yoyoarmy` to `tokeico/tic-api` (pushes are currently rejected) | Repo admin | ASAP |

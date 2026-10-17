@@ -161,10 +161,18 @@ describe("field validation", () => {
     for (const d of DEMO_INVOICES) expect(validateInvoice(demoInvoice(d.key))).toEqual([]);
   });
 
+  test("alphanumeric CNPJ (issued since July 2026) validates with the Receita Federal example", () => {
+    expect(isValidCnpj("12.ABC.345/01DE-35")).toBe(true);
+    expect(isValidCnpj("12abc34501de35")).toBe(true);
+    expect(isValidCnpj("12.ABC.345/01DE-34")).toBe(false);
+    expect(isValidCnpj("12.ABC.345/01DE-3A")).toBe(false); // check digits are always numeric
+  });
+
   test("bad check digits are reported", () => {
     expect(isValidClabe("012580001234567890")).toBe(false);
     expect(isValidCnpj("12345678000190")).toBe(false);
     expect(isValidCvu("0000003110000123456780")).toBe(false);
+    expect(isValidCnpj("00000000000000")).toBe(false);
     const issues = validateInvoice({ ...demoInvoice("mx"), bankId: { type: "spei", value: "12345" } });
     expect(issues).toEqual([{ field: "bankId", message: expect.stringContaining("18 digits") }]);
   });

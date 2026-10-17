@@ -415,11 +415,14 @@ export const journalLines = pgTable(
 
 // ---- Audit -----------------------------------------------------------------
 
-/** Append-only, hash-chained event log.
- *  hash = sha256(prev_hash + canonicalJSON({seq, payoutId, type, payload, createdAt}))
+/** Append-only, keyed hash chain (ARCHITECTURE §12, src/corredor/audit.ts).
+ *  mac = HMAC-SHA-512(key, prevMac + canonicalJSON({seq, payoutId, type, payload, createdAt, keyId}))
  *  A trigger (migration 0002) rejects UPDATE and DELETE. created_at has
  *  millisecond precision so it round-trips through JS Date exactly; set it
- *  in the app before hashing, don't rely on the default. */
+ *  in the app before MAC'ing, don't rely on the default. `seq` comes from the
+ *  identity sequence but is read first (appendAudit), because it is part of
+ *  the MAC. The DB columns keep their original names (`prev_hash`, `hash`)
+ *  because renaming needs a destructive migration; they hold the MACs. */
 export const auditEvents = pgTable(
   "audit_events",
   {
@@ -428,12 +431,23 @@ export const auditEvents = pgTable(
     actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
     type: auditEventTypeEnum("type").notNull(),
     payload: jsonb<Record<string, unknown>>("payload").notNull(),
-    prevHash: text("prev_hash").notNull(), // "0".repeat(64) for the first event
-    hash: text("hash").notNull().unique(),
+    prevMac: text("prev_hash").notNull(), // GENESIS_MAC (128 zeros) for the first event
+    mac: text("hash").notNull().unique(),
+    keyId: text("key_id").notNull().default(""), // HMAC key id, for rotation
     createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [index("audit_events_payout_idx").on(t.payoutId, t.seq)],
 );
+
+/** Ed25519-signed checkpoints over the head MAC (every 10 events and when a
+ *  payout is booked). Auditors verify them with the public key alone. */
+export const auditCheckpoints = pgTable("audit_checkpoints", {
+  seq: bigint("seq", { mode: "number" }).primaryKey(),
+  headMac: text("head_mac").notNull(),
+  signature: text("signature").notNull(), // base64
+  publicKeyId: text("public_key_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).notNull(),
+});
 
 // ---- Settings --------------------------------------------------------------
 
@@ -536,4 +550,5 @@ export type Reconciliation = typeof reconciliations.$inferSelect;
 export type JournalEntry = typeof journalEntries.$inferSelect;
 export type JournalLine = typeof journalLines.$inferSelect;
 export type AuditEvent = typeof auditEvents.$inferSelect;
+export type AuditCheckpointRow = typeof auditCheckpoints.$inferSelect;
 export type Setting = typeof settings.$inferSelect;
