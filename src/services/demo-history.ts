@@ -6,7 +6,7 @@
 // app's daily cap (which sums every approval on record) stays free for today.
 // The caller sets the workspace search_path.
 
-import { and, eq, notInArray } from "drizzle-orm";
+import { and, count, eq, notInArray, sql } from "drizzle-orm";
 import type { Invoice } from "../contracts";
 import {
   buildJournalEntry,
@@ -19,7 +19,7 @@ import {
   reference,
   screenPayee,
 } from "../corredor";
-import { schema } from "../db";
+import { db, schema } from "../db";
 import type { Tx } from "./tx";
 
 type Vendor = Omit<Invoice, "invoiceNumber" | "amount" | "dueDate" | "description" | "lowConfidence"> & {
@@ -167,4 +167,32 @@ export async function seedHistory(tx: Tx): Promise<number> {
       .where(eq(schema.payouts.id, payout!.id));
     booked++;
   }  return booked;
+}
+
+const backfilled = new Set<string>();
+
+/**
+ * Workspaces created before booked history shipped have empty books. Give them
+ * the same history once, the first time they load the app (GET /api/auth/me).
+ * Simulated rail only, and it never replaces anything: a workspace that already
+ * has history, or ran "Reset demo", is left alone. The caller is inside the
+ * request's workspace context.
+ */
+export async function ensureHistory(workspaceId: string): Promise<void> {
+  if (backfilled.has(workspaceId)) return;
+  if (process.env.DEMO_HISTORY === "off" || (process.env.RAIL_MODE ?? "mock") !== "mock") {
+    backfilled.add(workspaceId);
+    return;
+  }
+  const keep = DEMO_INVOICES.map((i) => i.invoiceNumber);
+  await db.transaction(async (tx) => {
+    // Two tabs loading at once must not both seed.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`history:${workspaceId}`}))`);
+    const [row] = await tx
+      .select({ n: count() })
+      .from(schema.invoices)
+      .where(and(eq(schema.invoices.source, "seed"), notInArray(schema.invoices.invoiceNumber, keep)));
+    if (Number(row?.n ?? 0) === 0) await seedHistory(tx);
+  });
+  backfilled.add(workspaceId);
 }

@@ -6,6 +6,7 @@ import { adminDb, schema } from "../db";
 import { ApiError } from "../http-error";
 import { createInvitation, DEMO_ADMIN_EMAIL, DEMO_ADMIN_USERNAME, issueSession, newToken, principalFor, publicUser, rateLimit, SECURE_COOKIE, SESSION_COOKIE, SESSION_SECONDS, signIn, signUp, tokenHash } from "../security/auth";
 import { requirePrincipal } from "../security/middleware";
+import { ensureHistory } from "../services/demo-history";
 
 const email = z.string().trim().toLowerCase().email().max(254);
 const credentials = z.object({ email, password: z.string().min(1).max(128), invitation: z.string().regex(/^ci_[A-Za-z0-9_-]{43}$/).optional() });
@@ -55,7 +56,12 @@ authRoutes.post("/signin", async (c) => {
   return c.json(await establishSession(c, await signIn(input.email, input.password, input.invitation)));
 });
 
-authRoutes.get("/me", (c) => c.json({ user: publicUser(requirePrincipal()) }));
+authRoutes.get("/me", async (c) => {
+  const principal = requirePrincipal();
+  // Older demo workspaces get their booked history on first load (simulated rail only).
+  await ensureHistory(principal.workspaceId).catch((err) => console.error("history backfill failed", err));
+  return c.json({ user: publicUser(principal) });
+});
 
 authRoutes.get("/workspaces", async (c) => {
   const p = requirePrincipal();
