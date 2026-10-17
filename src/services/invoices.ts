@@ -1,20 +1,23 @@
 // POST /api/invoices: PDF in, planned payout out (ARCHITECTURE §9, PRD 8.1).
-//   bytes → sha256 → duplicate check → extraction cache or (text → local model)
-//   → invoice + draft payout + "extracted" audit event (one transaction) → plan.
+//   bytes → sha256 → duplicate check → text → injection scan → extraction
+//   cache or local model → invoice + draft payout + security hold (if flagged)
+//   + "extracted" audit event (one transaction) → plan.
 
 import { eq } from "drizzle-orm";
 import type { Invoice, PayoutDetail } from "../contracts";
 import { sha256Hex } from "../corredor";
 import { db, schema } from "../db";
 import { ApiError } from "../http-error";
+import { maskDigits } from "../llm/agent";
 import { ExtractionError, extractInvoice, pdfText } from "../llm/extract";
+import { scanInjections } from "../llm/injection";
 import { LlmUnavailableError, type LlmProvider, getProvider } from "../llm/provider";
 import { appendAudit } from "./audit-log";
 import { planOne } from "./payouts";
 
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
-const { invoices, payouts, extractionCache } = schema;
+const { invoices, payouts, extractionCache, securityHolds } = schema;
 
 export interface UploadInput {
   filename: string;
@@ -29,6 +32,17 @@ export async function uploadInvoice({ filename, bytes, provider = getProvider() 
   const dup = await db.query.invoices.findFirst({ where: eq(invoices.pdfSha256, sha), with: { payout: true } });
   if (dup) throw new ApiError(409, "duplicate_invoice", `This PDF was already uploaded as invoice ${dup.invoiceNumber}${dup.payout ? ` (payout ${dup.payout.id})` : ""}.`);
 
+  // The text is read even on a cache hit: the injection scan is deterministic
+  // and always runs, so a flagged PDF can't slip through a cached extraction.
+  let text: string;
+  try {
+    text = await pdfText(bytes);
+  } catch (err) {
+    if (err instanceof ExtractionError) throw new ApiError(err.code === "not_pdf" ? 400 : 422, err.code, err.message);
+    throw err;
+  }
+  const findings = scanInjections(text);
+
   let invoice: Invoice;
   let source: "cache" | "llm";
   let model: string;
@@ -39,7 +53,7 @@ export async function uploadInvoice({ filename, bytes, provider = getProvider() 
     model = cached.model;
   } else {
     try {
-      invoice = await extractInvoice(await pdfText(bytes), provider);
+      invoice = await extractInvoice(text, provider);
     } catch (err) {
       if (err instanceof ExtractionError) throw new ApiError(err.code === "not_pdf" ? 400 : 422, err.code, err.message);
       if (err instanceof LlmUnavailableError) throw new ApiError(503, "llm_unavailable", `Can't read the invoice: ${err.message}`);
@@ -80,6 +94,17 @@ export async function uploadInvoice({ filename, bytes, provider = getProvider() 
       type: "extracted",
       payload: { filename: filename.slice(0, 200), pdfSha256: sha, source, model, lowConfidence: invoice.lowConfidence },
     });
+    // Prompt-injection defense: the text is quoted for a person (masked here)
+    // and the payout is held until a person clears it. The plan still runs;
+    // approval is what the hold gates.
+    if (findings.length > 0) {
+      const [hold] = await tx.insert(securityHolds).values({ payoutId: payout!.id, findings }).returning({ id: securityHolds.id });
+      await appendAudit(tx, {
+        payoutId: payout!.id,
+        type: "security_flagged",
+        payload: { holdId: hold!.id, findings: findings.length, patterns: [...new Set(findings.map((f) => f.pattern))], quotes: findings.map((f) => maskDigits(f.quote)) },
+      });
+    }
     return payout!.id;
   });
 

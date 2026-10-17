@@ -50,6 +50,13 @@
       "when": 1792260118452,
       "tag": "0006_cynical_spitfire",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792261619585,
+      "tag": "0007_aspiring_sharon_ventura",
+      "breakpoints": true
     }
   ]
 }

@@ -25,7 +25,9 @@ import {
   type Reroute,
   type ApproveRequest,
   type ReplayResult,
+  type SanctionsReviewRequest,
   type ScreeningReviewRequest,
+  type SecurityReviewRequest,
 } from "../contracts";
 import {
   UnknownCurrencyError,
@@ -45,6 +47,7 @@ import {
   warningCount,
   RailModeError,
   RailNotAvailableError,
+  type SanctionsInput,
   type ScreeningInput,
 } from "../corredor";
 import { db, schema } from "../db";
@@ -54,7 +57,7 @@ import { getDemoAsOf, getSettings, planOptions, setDemoAsOf } from "./settings";
 import type { Settings, SettingsPatch, SettingsUpdate } from "../contracts";
 import type { DbOrTx, Tx } from "./tx";
 
-const { payouts, plans, screenings, approvals, payments, reconciliations, journalEntries, journalLines, users } = schema;
+const { payouts, plans, screenings, sanctionsReviews, securityHolds, approvals, payments, reconciliations, journalEntries, journalLines, users } = schema;
 
 /** Statuses the engine may still change. Anything later is a human decision. */
 const REPLANNABLE: PayoutStatus[] = ["draft", "needs_info", "blocked", "awaiting_second_approver", "ready"];
@@ -93,17 +96,31 @@ function loadFull(q: DbOrTx, id: string) {
       approvals: { orderBy: [asc(approvals.createdAt)], with: { approver: true } },
       payments: { orderBy: [desc(payments.createdAt)], with: { reconciliation: true } },
       journalEntries: { with: { lines: true } },
+      sanctionsReviews: { orderBy: [desc(sanctionsReviews.createdAt)], limit: 1, with: { reviewer: true } },
+      securityHolds: { orderBy: [desc(securityHolds.createdAt)], limit: 1, with: { reviewer: true } },
     },
   });
 }
 type FullPayout = NonNullable<Awaited<ReturnType<typeof loadFull>>>;
 
-function toSummary(p: { id: string; status: PayoutStatus; amountUsd: number | null; invoice: InvoiceRow | null; plans: { plan: Plan }[] }): PayoutSummary {
+function toSummary(
+  p: {
+    id: string;
+    status: PayoutStatus;
+    amountUsd: number | null;
+    invoice: InvoiceRow | null;
+    plans: { plan: Plan }[];
+    securityHolds?: { status: string }[];
+  },
+): PayoutSummary {
   if (!p.invoice) throw new Error(`payout ${p.id} has no invoice`);
-  return toPayoutSummary(p.id, rowToInvoice(p.invoice), p.plans[0]?.plan ?? null, {
-    status: p.status,
-    amountUsd: p.amountUsd ?? undefined,
-  });
+  return {
+    ...toPayoutSummary(p.id, rowToInvoice(p.invoice), p.plans[0]?.plan ?? null, {
+      status: p.status,
+      amountUsd: p.amountUsd ?? undefined,
+    }),
+    ...(p.securityHolds?.[0] && p.securityHolds[0].status !== "cleared" ? { onSecurityHold: true } : {}),
+  };
 }
 
 function toMemo(memos: FullPayout["plans"][number]["memos"]): Memo | null {
@@ -124,11 +141,36 @@ function toDetail(p: FullPayout): PayoutDetail {
   const planRow = p.plans[0] ?? null;
   const pay = p.payments.find((x) => x.status !== "failed");
   const entry = p.journalEntries[0];
+  const review = p.sanctionsReviews[0];
+  const hold = p.securityHolds[0];
   return {
     ...toSummary(p),
     invoice: rowToInvoice(p.invoice!),
     plan: planRow?.plan ?? null,
     fingerprint: planRow ? planRow.planHash.slice(0, 16) : null,
+    ...(review
+      ? {
+          sanctionsReview: {
+            decision: review.decision,
+            licenseRef: review.licenseRef,
+            by: review.reviewer.name,
+            at: review.createdAt.toISOString(),
+            note: review.note,
+          },
+        }
+      : {}),
+    ...(hold
+      ? {
+          securityHold: {
+            findings: hold.findings,
+            status: hold.status,
+            reviewedBy: hold.reviewer ? hold.reviewer.name : null,
+            reviewedAt: hold.reviewedAt ? hold.reviewedAt.toISOString() : null,
+            reviewNote: hold.reviewNote,
+            flaggedAt: hold.createdAt.toISOString(),
+          },
+        }
+      : {}),
     // A stored (model-written) memo wins; otherwise the deterministic template, built from the plan.
     memo: planRow
       ? (toMemo(planRow.memos) ??
@@ -164,7 +206,11 @@ function toDetail(p: FullPayout): PayoutDetail {
 export async function listPayouts(q: DbOrTx = db): Promise<PayoutSummary[]> {
   const rows = await q.query.payouts.findMany({
     orderBy: [asc(payouts.createdAt), asc(payouts.id)],
-    with: { invoice: true, plans: { orderBy: [desc(plans.createdAt)], limit: 1 } },
+    with: {
+      invoice: true,
+      plans: { orderBy: [desc(plans.createdAt)], limit: 1 },
+      securityHolds: { orderBy: [desc(securityHolds.createdAt)], limit: 1 },
+    },
   });
   return rows.map(toSummary);
 }
@@ -178,6 +224,8 @@ export async function listPayoutDetails(q: DbOrTx = db): Promise<PayoutDetail[]>
       approvals: { orderBy: [asc(approvals.createdAt)], with: { approver: true } },
       payments: { orderBy: [desc(payments.createdAt)], with: { reconciliation: true } },
       journalEntries: { with: { lines: true } },
+      sanctionsReviews: { orderBy: [desc(sanctionsReviews.createdAt)], limit: 1, with: { reviewer: true } },
+      securityHolds: { orderBy: [desc(securityHolds.createdAt)], limit: 1, with: { reviewer: true } },
     },
   });
   return rows.map((r) => toDetail(r as FullPayout));
@@ -203,14 +251,30 @@ async function planContext(id: string) {
           ...(r.match ? { match: r.match } : {}),
           ...(r.score !== undefined ? { score: r.score } : {}),
         }));
-  return { invoice, screening, settings: await getSettings(db) };
+  return { invoice, screening, sanctions: await sanctionsReviewFor(db, id, invoice), settings: await getSettings(db) };
+}
+
+/**
+ * The recorded sanctions sign-off as the engine sees it. A review covers the
+ * payee as named and the bank details as reviewed: if either changed since,
+ * it no longer applies and the policy hold is back in force.
+ */
+async function sanctionsReviewFor(q: DbOrTx, payoutId: string, invoice: Invoice): Promise<SanctionsInput | null> {
+  const row = await q.query.sanctionsReviews.findFirst({
+    where: eq(sanctionsReviews.payoutId, payoutId),
+    orderBy: [desc(sanctionsReviews.createdAt)],
+    with: { reviewer: true },
+  });
+  if (!row) return null;
+  if (row.payeeName !== invoice.payeeName || (row.bankIdValue ?? null) !== (invoice.bankId?.value ?? null)) return null;
+  return { decision: row.decision, licenseRef: row.licenseRef, by: row.reviewer.name };
 }
 
 function enginePlan(id: string, ctx: Awaited<ReturnType<typeof planContext>>, asOf: string, hypothetical: Record<string, OfframpType> = {}): Plan {
   // `hypothetical` lets the radar ask "what if this registry update were approved?".
   const options = { ...planOptions(ctx.settings), registry: { ...ctx.settings.registry, ...hypothetical } };
   try {
-    return planPayout({ payoutId: id, invoice: ctx.invoice, asOf, screening: ctx.screening, policy: ctx.settings.policy, options });
+    return planPayout({ payoutId: id, invoice: ctx.invoice, asOf, screening: ctx.screening, sanctions: ctx.sanctions, policy: ctx.settings.policy, options });
   } catch (err) {
     if (err instanceof UnknownCurrencyError) throw new ApiError(422, "unsupported_currency", err.message);
     throw err;
@@ -327,9 +391,10 @@ async function planAndStore(tx: Tx, payout: typeof payouts.$inferSelect, asOf: s
   const invoice = rowToInvoice(invoiceRow);
 
   const screening = await screeningFor(tx, payout.id, invoice, actorId);
+  const sanctions = await sanctionsReviewFor(tx, payout.id, invoice);
   let plan: Plan;
   try {
-    plan = planPayout({ payoutId: payout.id, invoice, asOf, screening, policy: settings.policy, options: planOptions(settings) });
+    plan = planPayout({ payoutId: payout.id, invoice, asOf, screening, sanctions, policy: settings.policy, options: planOptions(settings) });
   } catch (err) {
     if (err instanceof UnknownCurrencyError) throw new ApiError(422, "unsupported_currency", err.message);
     throw err;
@@ -493,6 +558,98 @@ export async function reviewScreening(id: string, req: ScreeningReviewRequest): 
   return getPayout(id);
 }
 
+// ---- Sanctions policy hold (VE-OFAC) ------------------------------------------
+
+/**
+ * POST /api/payouts/:id/sanctions-review. A compliance person releases the
+ * sanctions policy hold (VE-OFAC, `liftedBy: "sanctions_signoff"`) or confirms
+ * it, after checking what OFAC requires: that the payee, its owners and the
+ * receiving bank aren't blocked, or are covered by a general license. The
+ * sign-off records what it covered; a release becomes a warning naming the
+ * reviewer, never a silent pass. Editing the payee name or bank details puts
+ * the hold back (see sanctionsReviewFor).
+ */
+export async function reviewSanctions(id: string, req: SanctionsReviewRequest): Promise<PayoutDetail> {
+  await db.transaction(async (tx) => {
+    const payout = await lock(tx, id);
+    await assertReplannable(tx, payout, "reviewed");
+    const reviewer = await resolveUser(tx, req.reviewer, APPROVER_ROLES, "review sanctions holds");
+    const invoiceRow = await tx.query.invoices.findFirst({ where: eq(schema.invoices.id, payout.invoiceId) });
+    if (!invoiceRow) throw new Error(`payout ${id} has no invoice`);
+    const invoice = rowToInvoice(invoiceRow);
+    const planRow = await tx.query.plans.findFirst({ where: eq(plans.payoutId, id), orderBy: [desc(plans.createdAt)] });
+    if (!planRow) throw new ApiError(409, "no_plan", "This payout hasn't been planned yet.");
+    const liftable = new Set(reference().rules.filter((r) => r.liftedBy === "sanctions_signoff").map((r) => r.id));
+    const onHold = planRow.plan.evaluations.some((e) => e.results.some((r) => r.outcome === "block" && liftable.has(r.ruleId)));
+    if (!onHold) throw new ApiError(409, "no_sanctions_hold", "This payout isn't on a sanctions policy hold.");
+
+    const [row] = await tx
+      .insert(sanctionsReviews)
+      .values({
+        payoutId: id,
+        decision: req.decision,
+        licenseRef: req.licenseRef ?? null,
+        note: req.note,
+        reviewedBy: reviewer.id,
+        payeeName: invoice.payeeName,
+        bankIdValue: invoice.bankId?.value ?? null,
+      })
+      .returning({ id: sanctionsReviews.id });
+    await appendAudit(tx, {
+      payoutId: id,
+      actorId: reviewer.id,
+      type: "sanctions_reviewed",
+      payload: { decision: req.decision, licenseRef: req.licenseRef ?? null, by: reviewer.name, note: req.note, statusBefore: payout.status, reviewId: row!.id },
+    });
+    const settings = await getSettings(tx);
+    await planAndStore(tx, payout, payout.asOf ?? settings.asOf, settings, reviewer.id);
+  });
+  return getPayout(id);
+}
+
+// ---- Security hold (prompt-injection defense) ---------------------------------------
+
+/** Refuse to approve or pay while a security hold gates the payout
+ *  (both "active" and "confirmed_suspicious"; only a person's "cleared" lifts it). */
+async function assertNoSecurityHold(tx: Tx, payoutId: string): Promise<void> {
+  const hold = await tx.query.securityHolds.findFirst({
+    where: eq(securityHolds.payoutId, payoutId),
+    orderBy: [desc(securityHolds.createdAt)],
+  });
+  if (hold && hold.status !== "cleared") {
+    const n = hold.findings.length;
+    throw new ApiError(409, "security_hold", `Instruction-like text in this invoice was flagged (${n} line${n === 1 ? "" : "s"}). A person must review it first: see the Security hold card.`);
+  }
+}
+
+/**
+ * POST /api/payouts/:id/security-review. A person clears the security hold
+ * ("the flagged lines are just text") or keeps the payout held as suspicious.
+ * Only people decide this: the agent can flag and quote, never clear.
+ */
+export async function reviewSecurityHold(id: string, req: SecurityReviewRequest): Promise<PayoutDetail> {
+  await db.transaction(async (tx) => {
+    const payout = await lock(tx, id);
+    const reviewer = await resolveUser(tx, req.reviewer, APPROVER_ROLES, "review security holds");
+    const hold = await tx.query.securityHolds.findFirst({
+      where: eq(securityHolds.payoutId, id),
+      orderBy: [desc(securityHolds.createdAt)],
+    });
+    if (!hold || hold.status !== "active") throw new ApiError(409, "no_security_hold", "This payout isn't on a security hold.");
+    await tx
+      .update(securityHolds)
+      .set({ status: req.decision === "cleared" ? "cleared" : "confirmed_suspicious", reviewedBy: reviewer.id, reviewedAt: new Date(), reviewNote: req.note })
+      .where(eq(securityHolds.id, hold.id));
+    await appendAudit(tx, {
+      payoutId: id,
+      actorId: reviewer.id,
+      type: "security_reviewed",
+      payload: { decision: req.decision, by: reviewer.name, note: req.note, holdId: hold.id, findings: hold.findings.length },
+    });
+  });
+  return getPayout(id);
+}
+
 // ---- Approval ---------------------------------------------------------------------
 
 const startOfUtcDay = () => new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z");
@@ -502,6 +659,7 @@ export async function approve(id: string, req: ApproveRequest): Promise<PayoutDe
   try {
     await db.transaction(async (tx) => {
       const payout = await lock(tx, id);
+      await assertNoSecurityHold(tx, id); // the security hold gates approval too, whatever the plan says
       const approver = await resolveUser(tx, req.approver, APPROVER_ROLES, "approve payouts");
       const planRow = await tx.query.plans.findFirst({ where: eq(plans.payoutId, id), orderBy: [desc(plans.createdAt)] });
       if (!planRow) throw new ApiError(409, "no_plan", "This payout hasn't been planned yet.");
@@ -585,6 +743,7 @@ export async function pay(id: string, by?: string): Promise<PayoutDetail> {
   try {
     await db.transaction(async (tx) => {
       const payout = await lock(tx, id);
+      await assertNoSecurityHold(tx, id); // belt and braces: a held payout can't be approved to be paid
       const actor = by ? await resolveUser(tx, by, APPROVER_ROLES, "send payments") : null;
       if (payout.status !== "approved") {
         throw new ApiError(409, "not_approved", `A payout in status "${payout.status}" can't be paid. It must be approved first.`);

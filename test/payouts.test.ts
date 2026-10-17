@@ -560,6 +560,109 @@ suite("payouts API (Postgres)", () => {
     expect(again.memo?.summary).toBe(good.summary);
   });
 
+  test("sanctions sign-off releases the VE-OFAC hold; a bank-detail change re-arms it", async () => {
+    const ve = ids.ve;
+    // Not on a sanctions hold: refuse with a clear code.
+    expect(((await post(`/api/payouts/${ids.ar}/sanctions-review`, { reviewer: "Daniel Ortiz", decision: "released", note: "not applicable" })).json.error.code)).toBe("no_sanctions_hold");
+
+    // Before: blocked on every route by VE-OFAC (the PRD §10 state).
+    expect(((await get(`/api/payouts/${ve}`)).json).status).toBe("blocked");
+
+    // Release it: the reviewer says what was checked and names the general license.
+    const r = await post(`/api/payouts/${ve}/sanctions-review`, {
+      reviewer: "Daniel Ortiz",
+      decision: "released",
+      licenseRef: "GL 57",
+      note: "Payee, its owners and the receiving bank are not blocked persons; GL 57 covers the bank.",
+    });
+    expect(r.status).toBe(200);
+    expect(r.json.status).toBe("ready"); // Venezuela has no off-ramp in the demo registry: the wire is the route
+    expect(r.json.recommended.label).toContain("SWIFT");
+    expect(r.json.sanctionsReview).toMatchObject({ decision: "released", by: "Daniel Ortiz", licenseRef: "GL 57" });
+    const ofac = r.json.plan.evaluations.find((e: Json) => e.route.kind === "wire").results.find((x: Json) => x.ruleId === "VE-OFAC");
+    expect(ofac.outcome).toBe("warn"); // released, not silently gone: the sign-off stays visible
+    expect(ofac.message).toContain("Compliance sign-off recorded by Daniel Ortiz");
+    expect(ofac.message).toContain("GL 57");
+    expect(r.json.plan.reasons.join(" ")).toContain("Compliance sign-off recorded by Daniel Ortiz");
+    expect(r.json.warnings).toBe(1);
+
+    // The release survives a re-plan on another date (the slider moves on without re-asking).
+    await post("/api/plan-all?asOf=2026-10-31");
+    expect(((await get(`/api/payouts/${ve}`)).json).status).toBe("ready");
+    await post("/api/plan-all?asOf=2026-10-17");
+
+    // The sign-off covered the bank details as reviewed: changing them re-arms the hold.
+    const renamed = await call("PATCH", `/api/payouts/${ve}`, { bankId: { type: "swift", value: "DEMOVECBXXX" }, by: "Maria Lopez" });
+    expect(renamed.json.status).toBe("blocked");
+    expect(renamed.json.sanctionsReview).toMatchObject({ decision: "released" }); // still on record…
+
+    // A confirmed review keeps the block and names who confirmed it.
+    const confirmed = await post(`/api/payouts/${ve}/sanctions-review`, { reviewer: "Maria Lopez", decision: "confirmed_blocked", note: "Ownership chain unresolved; keep the hold." });
+    expect(confirmed.json.status).toBe("blocked");
+    expect(JSON.stringify(confirmed.json.plan.evaluations)).toContain("Confirmed by compliance review (Maria Lopez)");
+
+    const ev = ((await get("/api/audit")).json as unknown as Json[]).filter((e) => e.type === "sanctions_reviewed" && e.payoutId === ve);
+    expect(ev.map((e) => e.payload.decision)).toEqual(["confirmed_blocked", "released"]); // newest first
+    expect(ev[1].payload).toMatchObject({ by: "Daniel Ortiz", licenseRef: "GL 57" });
+  });
+
+  test("prompt injection: a hostile invoice is flagged, quoted and held until a person decides", async () => {
+    const { uploadInvoice } = await import("../src/services/invoices");
+    const { invoicePdf, HOSTILE_INVOICE } = await import("../scripts/demo-pdfs");
+    const stamp = Date.now() % 1_000_000;
+    const fakeFor = (inv: { invoiceNumber: string; payeeName: string; description: string }) => ({
+      name: "fake",
+      model: "fake-extractor",
+      available: async () => true,
+      chat: async () => ({ content: "", toolCalls: [] }),
+      json: async () => ({ invoiceNumber: inv.invoiceNumber, payeeName: inv.payeeName, payeeCountry: "BR", payeeTaxId: "", amount: 18900, currency: "BRL", dueDate: "2026-11-02", bankType: "pix", bankValue: "financeiro@consultoriadelta.demo", description: inv.description, purposeCode: "46978" }),
+    });
+
+    // Upload 1: extracts normally, gets flagged and held.
+    const inv = { ...HOSTILE_INVOICE, invoiceNumber: `CD-${stamp}` };
+    const d = await uploadInvoice({ filename: "hostile.pdf", bytes: await invoicePdf(inv), provider: fakeFor(inv) as never });
+    expect(d.status).toBe("ready"); // the plan still runs; the hold gates approval, not the engine
+    expect(d.onSecurityHold).toBe(true);
+    expect(d.securityHold).toMatchObject({ status: "active" });
+    expect(d.securityHold!.findings.length).toBe(3);
+    expect(d.securityHold!.findings[0]!.quote).toContain("ignore previous instructions");
+    expect(d.invoice).toMatchObject({ payeeName: "Consultoria Delta Ltda", bankId: { type: "pix", value: "financeiro@consultoriadelta.demo" } }); // the injection didn't reach the fields
+
+    const ev = ((await get("/api/audit")).json as unknown as Json[]).find((e) => e.type === "security_flagged" && e.payoutId === d.id)!;
+    expect(ev.payload).toMatchObject({ findings: 3, patterns: ["instruction-override", "secrecy", "bank-account-switch"] });
+
+    // Approval is refused while held…
+    expect(((await post(`/api/payouts/${d.id}/approve`, { approver: "Maria Lopez" })).json.error.code)).toBe("security_hold");
+    // …and the memo is told, and can't claim it's being paid.
+    const { writeMemo } = await import("../src/services/memo");
+    const prompts: string[] = [];
+    const payClaim = { summary: "Consultoria Delta is being paid.", routeRationale: "Pix is cheapest.", warnings: [], humanChecks: [], citedRuleIds: [] };
+    const good = { summary: "USD 3,500.00 to Consultoria Delta Ltda via Pix, on security hold.", routeRationale: "Pix via Sol VASP is the cheapest compliant route.", warnings: ["BR-VASP-UNFILED-WARN: Sol hasn't filed"], humanChecks: ["Clear the security hold"], citedRuleIds: ["BR-VASP-UNFILED-WARN"] };
+    await expect(writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async (_s: string, u: string) => (prompts.push(u), out.shift()) }))([payClaim, payClaim]) as never)).rejects.toMatchObject({ code: "memo_guard_failed" });
+    expect(prompts[0]).toContain("security hold"); // the model was told
+    const memoed = await writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async () => out.shift() }))([good]) as never);
+    expect(memoed.memo!.summary).toContain("on security hold");
+
+    // A person clears it; then approval works.
+    const rev = await post(`/api/payouts/${d.id}/security-review`, { reviewer: "Maria Lopez", decision: "cleared", note: "Read the notes: they're just text. Fields match the contract." });
+    expect(rev.json.securityHold).toMatchObject({ status: "cleared", reviewedBy: "Maria Lopez" });
+    expect(rev.json.onSecurityHold).toBeUndefined();
+    expect((await post(`/api/payouts/${d.id}/approve`, { approver: "Maria Lopez" })).json.status).toBe("approved");
+    // Nothing left to review.
+    expect(((await post(`/api/payouts/${d.id}/security-review`, { reviewer: "Maria Lopez", decision: "cleared", note: "again" })).json.error.code)).toBe("no_security_hold");
+
+    // Upload 2: a second hostile invoice is kept on hold as suspicious, and stays locked.
+    const inv2 = { ...HOSTILE_INVOICE, invoiceNumber: `CD-${stamp + 1}` };
+    const d2 = await uploadInvoice({ filename: "hostile2.pdf", bytes: await invoicePdf(inv2), provider: fakeFor(inv2) as never });
+    const kept = await post(`/api/payouts/${d2.id}/security-review`, { reviewer: "Daniel Ortiz", decision: "confirmed_suspicious", note: "This is not a real supplier." });
+    expect(kept.json.securityHold).toMatchObject({ status: "confirmed_suspicious", reviewedBy: "Daniel Ortiz" });
+    expect(kept.json.onSecurityHold).toBe(true);
+    expect(((await post(`/api/payouts/${d2.id}/approve`, { approver: "Maria Lopez" })).json.error.code)).toBe("security_hold");
+
+    const held = ((await get("/api/audit")).json as unknown as Json[]).filter((e) => e.type === "security_reviewed");
+    expect(held.map((e) => e.payload.decision)).toEqual(["confirmed_suspicious", "cleared"]); // newest first
+  });
+
   test("POST /api/demo/reset wipes back to four draft payouts and a clean chain", async () => {
     process.env.ALLOW_DEMO_RESET = "0";
     expect((await post("/api/demo/reset")).json.error.code).toBe("demo_reset_disabled");

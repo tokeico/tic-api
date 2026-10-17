@@ -45,14 +45,17 @@ import {
   PAYOUT_STATUSES,
   RAIL_MODES,
   RECONCILIATION_STATUSES,
+  SANCTIONS_REVIEW_DECISIONS,
   SCREENING_REVIEW_DECISIONS,
   SCREENING_STATUSES,
+  SECURITY_HOLD_STATUSES,
   USER_ROLES,
   VENDOR_REQUEST_STATUSES,
   type ExtractedInvoice,
   type Plan,
   type Route,
   type RouteEvaluation,
+  type SecurityFinding,
 } from "./types";
 import { jsonb } from "./jsonb";
 
@@ -63,6 +66,8 @@ export const localRailEnum = pgEnum("local_rail", LOCAL_RAILS);
 export const payoutStatusEnum = pgEnum("payout_status", PAYOUT_STATUSES);
 export const screeningStatusEnum = pgEnum("screening_status", SCREENING_STATUSES);
 export const screeningReviewDecisionEnum = pgEnum("screening_review_decision", SCREENING_REVIEW_DECISIONS);
+export const sanctionsReviewDecisionEnum = pgEnum("sanctions_review_decision", SANCTIONS_REVIEW_DECISIONS);
+export const securityHoldStatusEnum = pgEnum("security_hold_status", SECURITY_HOLD_STATUSES);
 export const userRoleEnum = pgEnum("user_role", USER_ROLES);
 export const approvalRoleEnum = pgEnum("approval_role", APPROVAL_ROLES);
 export const approvalDecisionEnum = pgEnum("approval_decision", APPROVAL_DECISIONS);
@@ -203,6 +208,52 @@ export const screenings = pgTable(
     index("screenings_payout_idx").on(t.payoutId, t.createdAt),
     check("screenings_score_range", sql`${t.score} IS NULL OR (${t.score} >= 0 AND ${t.score} <= 1)`),
   ],
+);
+
+/** Compliance sign-off on a sanctions policy hold (VE-OFAC, rules with
+ *  `liftedBy: "sanctions_signoff"`). A release covers the payee as named and
+ *  the bank details as reviewed: if either changes, the next plan treats the
+ *  hold as back in force (the engine re-checks against these snapshots). */
+export const sanctionsReviews = pgTable(
+  "sanctions_reviews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    payoutId: uuid("payout_id")
+      .notNull()
+      .references(() => payouts.id, { onDelete: "cascade" }),
+    decision: sanctionsReviewDecisionEnum("decision").notNull(),
+    licenseRef: text("license_ref"), // OFAC general license relied on, e.g. "GL 57"
+    note: text("note").notNull(), // what the reviewer checked
+    reviewedBy: uuid("reviewed_by")
+      .notNull()
+      .references(() => users.id),
+    /** Snapshots of what was reviewed; a mismatch re-arms the hold. */
+    payeeName: text("payee_name").notNull(),
+    bankIdValue: text("bank_id_value"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("sanctions_reviews_payout_idx").on(t.payoutId, t.createdAt)],
+);
+
+/** Prompt-injection defense: instruction-like lines found in an uploaded
+ *  invoice's text. `active` blocks approval until a person records a review;
+ *  `cleared` releases it, `confirmed_suspicious` keeps the payout held. */
+export const securityHolds = pgTable(
+  "security_holds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    payoutId: uuid("payout_id")
+      .notNull()
+      .references(() => payouts.id, { onDelete: "cascade" }),
+    findings: jsonb<SecurityFinding[]>("findings").notNull(),
+    status: securityHoldStatusEnum("status").notNull().default("active"),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewNote: text("review_note"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("security_holds_payout_idx").on(t.payoutId, t.createdAt)],
 );
 
 // ---- Plans and memos ---------------------------------------------------------
@@ -472,6 +523,8 @@ export const invoicesRelations = relations(invoices, ({ one }) => ({
 export const payoutsRelations = relations(payouts, ({ one, many }) => ({
   invoice: one(invoices, { fields: [payouts.invoiceId], references: [invoices.id] }),
   screenings: many(screenings),
+  sanctionsReviews: many(sanctionsReviews),
+  securityHolds: many(securityHolds),
   plans: many(plans),
   vendorRequests: many(vendorRequests),
   approvals: many(approvals),
@@ -484,6 +537,16 @@ export const payoutsRelations = relations(payouts, ({ one, many }) => ({
 export const screeningsRelations = relations(screenings, ({ one }) => ({
   payout: one(payouts, { fields: [screenings.payoutId], references: [payouts.id] }),
   reviewer: one(users, { fields: [screenings.reviewedBy], references: [users.id] }),
+}));
+
+export const sanctionsReviewsRelations = relations(sanctionsReviews, ({ one }) => ({
+  payout: one(payouts, { fields: [sanctionsReviews.payoutId], references: [payouts.id] }),
+  reviewer: one(users, { fields: [sanctionsReviews.reviewedBy], references: [users.id] }),
+}));
+
+export const securityHoldsRelations = relations(securityHolds, ({ one }) => ({
+  payout: one(payouts, { fields: [securityHolds.payoutId], references: [payouts.id] }),
+  reviewer: one(users, { fields: [securityHolds.reviewedBy], references: [users.id] }),
 }));
 
 export const plansRelations = relations(plans, ({ one, many }) => ({
@@ -541,6 +604,8 @@ export type NewInvoiceRow = typeof invoices.$inferInsert;
 export type Payout = typeof payouts.$inferSelect;
 export type NewPayout = typeof payouts.$inferInsert;
 export type Screening = typeof screenings.$inferSelect;
+export type SanctionsReview = typeof sanctionsReviews.$inferSelect;
+export type SecurityHold = typeof securityHolds.$inferSelect;
 export type PlanRow = typeof plans.$inferSelect;
 export type MemoRow = typeof memos.$inferSelect;
 export type VendorRequest = typeof vendorRequests.$inferSelect;

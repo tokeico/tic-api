@@ -60,12 +60,15 @@ const usd = (n: number) => `USD ${n.toLocaleString("en-US", { minimumFractionDig
 
 function summary(p: PayoutDetail) {
   const warnings = p.plan ? (p.plan.evaluations.find((e) => e.route.id === p.plan!.recommended?.id)?.results ?? []).filter((r) => r.outcome === "warn").map((r) => r.ruleId) : [];
+  const onHold = p.securityHold?.status === "active";
   return {
     payout: p.payeeName,
     country: p.country,
     invoice: p.invoice.invoiceNumber,
     amount: p.currency === "USD" ? usd(p.amountLocal) : `${money(p.amountLocal, p.currency)} (${usd(p.amountUsd)})`,
-    status: STATUS_TEXT[p.status],
+    status: onHold ? "on security hold: a person must review instruction-like text found in the invoice before it can be approved" : STATUS_TEXT[p.status],
+    ...(onHold ? { securityHold: { flaggedLines: p.securityHold!.findings.length, quotedLines: p.securityHold!.findings.map((f) => `${f.pattern}: ${short(maskDigits(f.quote) ?? "", 120)}`) } } : {}),
+    ...(p.securityHold?.status === "confirmed_suspicious" ? { securityHold: "kept on hold by a person (confirmed suspicious); do not propose paying it" } : {}),
     route: p.plan?.recommended ? routeLabel(p.plan.recommended) : "none (no compliant route)",
     ...(p.status === "blocked" || p.status === "needs_info" ? { why: short(p.plan?.reasons[0] ?? "", 160) } : {}),
     warnings,
@@ -89,6 +92,9 @@ function detail(p: PayoutDetail) {
     },
     planAsOf: plan?.asOf ?? null,
     screening: plan?.screening ?? null,
+    sanctionsReview: p.sanctionsReview
+      ? `${p.sanctionsReview.decision === "released" ? "released" : "confirmed blocked"} by ${p.sanctionsReview.by}${p.sanctionsReview.licenseRef ? ` (OFAC general license ${p.sanctionsReview.licenseRef})` : ""} — a person already decided this; explain it, don't re-litigate it`
+      : null,
     reasons: plan?.reasons.map((r) => short(r)) ?? [],
     routes: (plan?.evaluations ?? []).map((e) => ({
       route: routeLabel(e.route),
@@ -227,12 +233,13 @@ export async function runTool(name: string, args: Record<string, unknown>, c: Ct
       } else {
         const p = need();
         payoutId = p.id;
+        const held = p.securityHold?.status === "active" || p.securityHold?.status === "confirmed_suspicious";
         const ok =
-          (k === "approve" && (p.status === "ready" || p.status === "awaiting_second_approver")) ||
-          (k === "pay" && p.status === "approved" && !p.payment) ||
+          (k === "approve" && (p.status === "ready" || p.status === "awaiting_second_approver") && !held) ||
+          (k === "pay" && p.status === "approved" && !p.payment && !held) ||
           (k === "reconcile" && p.status === "paid") ||
           k === "email";
-        if (!ok) throw new Error(`Can't propose ${k} for ${p.payeeName}: its status is ${p.status}.`);
+        if (!ok) throw new Error(held ? `Can't propose ${k} for ${p.payeeName}: it is on a security hold until a person reviews the flagged invoice text.` : `Can't propose ${k} for ${p.payeeName}: its status is ${p.status}.`);
       }
       const body = typeof args.email_body === "string" ? maskDigits(args.email_body) : undefined;
       if (k === "email" && !body) throw new Error("email_body is required for kind=email.");

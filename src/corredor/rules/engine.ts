@@ -29,12 +29,23 @@ export interface ScreeningInput extends Screening {
   reviewDecision?: "cleared" | "confirmed_hit" | null;
 }
 
+/** A compliance sign-off on a sanctions policy hold, as the engine sees it. */
+export interface SanctionsInput {
+  decision: "released" | "confirmed_blocked";
+  /** OFAC general license relied on, e.g. "GL 57"; null rests on "nobody blocked is involved". */
+  licenseRef: string | null;
+  /** Reviewer's name: the rule message quotes it, so the plan explains who signed off. */
+  by: string;
+}
+
 export interface PlanInput {
   payoutId: string;
   invoice: Invoice;
   asOf: string; // YYYY-MM-DD
   routes: Route[]; // from quote()
   screening: ScreeningInput;
+  /** Recorded sanctions sign-off on this payout, if any (see applySanctionsReview). */
+  sanctions?: SanctionsInput | null;
   rules: Rule[];
   rulesVersion: string;
   fx: FxTable;
@@ -116,6 +127,33 @@ export function pickRecommended(ranked: RouteEvaluation[], objective: Objective 
   return compliant.find((e) => e.route.kind === "wire") ?? null;
 }
 
+/**
+ * A compliance sign-off on a policy-hold rule (`liftedBy: "sanctions_signoff"`).
+ * A release turns the block into a warning naming the sign-off, so the
+ * checklist and the memo still show why the hold was lifted and by whom; a
+ * confirmation keeps the block and records who confirmed it. Rules stay data:
+ * only rules marked `liftedBy` change behaviour.
+ */
+function applySanctionsReview(evaluations: RouteEvaluation[], rules: Rule[], review: SanctionsInput): RouteEvaluation[] {
+  const signoffRules = new Set(rules.filter((r) => r.liftedBy === "sanctions_signoff").map((r) => r.id));
+  if (signoffRules.size === 0) return evaluations;
+  return evaluations.map((e) => {
+    const results = e.results.map((r) => {
+      if (r.outcome !== "block" || !signoffRules.has(r.ruleId)) return r;
+      if (review.decision === "released") {
+        const gl = review.licenseRef ? ` under OFAC general license ${review.licenseRef}` : "";
+        return {
+          ...r,
+          outcome: "warn" as const,
+          message: `${r.message} Compliance sign-off recorded by ${review.by}${gl}: the payee, its owners and the receiving bank were reviewed.`,
+        };
+      }
+      return { ...r, message: `${r.message} Confirmed by compliance review (${review.by}): a blocked person or bank is involved. Do not pay.` };
+    });
+    return { ...e, results, compliant: !results.some((r) => r.outcome === "block") };
+  });
+}
+
 // ---- Plan ----------------------------------------------------------------------
 
 const ref = (r: RuleResult) => `${r.ruleId}: ${r.message}`;
@@ -125,8 +163,10 @@ export function plan(input: PlanInput): Plan {
   assertIsoDate(asOf, "asOf");
 
   const rules = activeRules(input.rules, asOf, invoice.payeeCountry);
-  const evaluations = rankEvaluations(routes.map((route) => evaluateRoute(route, invoice, rules, fx)));
-  const best = pickRecommended(evaluations, input.objective);
+  let evaluations = routes.map((route) => evaluateRoute(route, invoice, rules, fx));
+  if (input.sanctions) evaluations = applySanctionsReview(evaluations, rules, input.sanctions);
+  const ranked = rankEvaluations(evaluations);
+  const best = pickRecommended(ranked, input.objective);
   const recommended = best?.route ?? null;
   const amountUsd = routes[0]?.amountUsd ?? 0;
 
@@ -154,7 +194,7 @@ export function plan(input: PlanInput): Plan {
     if (routes.length === 0) reasons.push(`No candidate routes for ${invoice.payeeCountry}.`);
     // Every distinct blocking rule, in ranked-route order, once each.
     const seen = new Set<string>();
-    for (const e of evaluations) {
+    for (const e of ranked) {
       for (const r of e.results) {
         if (r.outcome === "block" && !seen.has(r.ruleId)) {
           seen.add(r.ruleId);
@@ -192,7 +232,7 @@ export function plan(input: PlanInput): Plan {
       ...(screening.match !== undefined ? { match: screening.match } : {}),
       ...(screening.score !== undefined ? { score: screening.score } : {}),
     },
-    evaluations,
+    evaluations: ranked,
     recommended,
     status: status!,
     reasons,

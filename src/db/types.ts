@@ -47,6 +47,16 @@ export type ScreeningStatus = (typeof SCREENING_STATUSES)[number];
 export const SCREENING_REVIEW_DECISIONS = ["cleared", "confirmed_hit"] as const;
 export type ScreeningReviewDecision = (typeof SCREENING_REVIEW_DECISIONS)[number];
 
+// Compliance sign-off on a sanctions policy hold (VE-OFAC): release it after
+// checking the payee, its owners and the receiving bank, or confirm the block.
+export const SANCTIONS_REVIEW_DECISIONS = ["released", "confirmed_blocked"] as const;
+export type SanctionsReviewDecision = (typeof SANCTIONS_REVIEW_DECISIONS)[number];
+
+// Security hold lifecycle (prompt-injection defense): flagged on upload,
+// then a person clears it or keeps the payout held.
+export const SECURITY_HOLD_STATUSES = ["active", "cleared", "confirmed_suspicious"] as const;
+export type SecurityHoldStatus = (typeof SECURITY_HOLD_STATUSES)[number];
+
 export const USER_ROLES = ["controller", "approver", "ap_clerk", "auditor"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -90,6 +100,10 @@ export const AUDIT_EVENT_TYPES = [
   "reconciled",
   "asof_changed",
   "settings_changed",
+  // Added with the sanctions sign-off and security hold (order fixed: appended).
+  "sanctions_reviewed",
+  "security_flagged",
+  "security_reviewed",
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
@@ -106,4 +120,5 @@ export type {
   RouteEvaluation,
   Plan,
   Policy,
+  SecurityFinding,
 } from "../contracts";

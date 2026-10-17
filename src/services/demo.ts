@@ -46,6 +46,7 @@ export async function resetDemo(): Promise<{ users: number; payouts: number }> {
     await tx.execute(sql`
       TRUNCATE audit_events, audit_checkpoints, journal_lines, journal_entries, reconciliations,
                payments, approvals, vendor_requests, memos, plans, screenings,
+               sanctions_reviews, security_holds,
                payouts, invoices, users, settings
       RESTART IDENTITY CASCADE`);
 

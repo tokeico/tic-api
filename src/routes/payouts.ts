@@ -4,7 +4,7 @@
 
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { ApproveRequest, InvoicePatch, OfframpType, ScreeningReviewRequest } from "../contracts";
+import { ApproveRequest, InvoicePatch, OfframpType, SanctionsReviewRequest, ScreeningReviewRequest, SecurityReviewRequest } from "../contracts";
 import { isIsoDate } from "../corredor";
 import { ApiError } from "../http-error";
 import * as svc from "../services/payouts";
@@ -88,6 +88,16 @@ payoutRoutes.post("/:id/plan", async (c) => c.json(await svc.planOne(c.req.param
 
 payoutRoutes.post("/:id/screening-review", async (c) =>
   c.json(await svc.reviewScreening(c.req.param("id"), await body(c, ScreeningReviewRequest))),
+);
+
+/** POST /api/payouts/:id/sanctions-review  A compliance person releases the VE-OFAC hold (or confirms it). */
+payoutRoutes.post("/:id/sanctions-review", async (c) =>
+  c.json(await svc.reviewSanctions(c.req.param("id"), await body(c, SanctionsReviewRequest))),
+);
+
+/** POST /api/payouts/:id/security-review  A person clears the security hold or keeps the payout held. */
+payoutRoutes.post("/:id/security-review", async (c) =>
+  c.json(await svc.reviewSecurityHold(c.req.param("id"), await body(c, SecurityReviewRequest))),
 );
 
 payoutRoutes.post("/:id/approve", async (c) => c.json(await svc.approve(c.req.param("id"), await body(c, ApproveRequest))));

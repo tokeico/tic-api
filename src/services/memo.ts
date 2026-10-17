@@ -16,7 +16,7 @@ import { LlmUnavailableError, type LlmProvider, getProvider } from "../llm/provi
 import { appendAudit } from "./audit-log";
 import { getPayout, isUuid, rowToInvoice } from "./payouts";
 
-const { plans, memos, payouts } = schema;
+const { plans, memos, payouts, securityHolds } = schema;
 
 const MEMO_SCHEMA = {
   type: "object",
@@ -47,7 +47,6 @@ const DECISION: Record<string, string> = {
   needs_info: "on hold: must not be paid until required fields arrive",
   blocked: "blocked: must NOT be paid; every route is blocked",
 };
-
 export async function writeMemo(id: string, provider: LlmProvider = getProvider()): Promise<PayoutDetail> {
   if (!isUuid(id)) throw notFound();
   const payout = await db.query.payouts.findFirst({ where: eq(payouts.id, id), with: { invoice: true } });
@@ -58,6 +57,8 @@ export async function writeMemo(id: string, provider: LlmProvider = getProvider(
 
   const plan = planRow.plan;
   const invoice = rowToInvoice(payout.invoice);
+  const holdRow = await db.query.securityHolds.findFirst({ where: eq(securityHolds.payoutId, id), orderBy: [desc(securityHolds.createdAt)] });
+  const onHold = holdRow?.status === "active";
   const amountUsd = payout.amountUsd ?? plan.evaluations[0]?.route.amountUsd ?? 0;
   const target = plan.evaluations.find((e) => e.route.id === plan.recommended?.id) ?? plan.evaluations.find((e) => e.route.kind === "wire");
   const allowed = new Set((target?.results ?? []).map((r) => r.ruleId));
@@ -70,7 +71,10 @@ export async function writeMemo(id: string, provider: LlmProvider = getProvider(
     amount: `${invoice.currency} ${invoice.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}${invoice.currency === "USD" ? "" : ` (USD ${amountUsd.toLocaleString("en-US", { minimumFractionDigits: 2 })})`}`,
     description: invoice.description,
     asOf: plan.asOf,
-    decision: DECISION[plan.status] ?? plan.status,
+    decision: onHold
+      ? "on security hold: instruction-like text in the invoice was flagged and a person must review it before anything else; must NOT be paid yet"
+      : DECISION[plan.status] ?? plan.status,
+    securityHold: onHold ? `${holdRow!.findings.length} instruction-like line(s) were found in the invoice text and quoted for a person. The payout cannot be approved until someone clears the hold.` : undefined,
     recommendedRoute: plan.recommended ? template.routeRationale.split(" is the ")[0] : "none: every route is blocked",
     rulesChecked: (target?.results ?? []).map((r) => ({ id: r.ruleId, title: r.title, outcome: r.outcome, message: r.message.slice(0, 300) })),
     otherRoutes: plan.evaluations
@@ -101,7 +105,7 @@ export async function writeMemo(id: string, provider: LlmProvider = getProvider(
     const prose = `${parsed.data.summary} ${parsed.data.routeRationale}`.toLowerCase();
     const claimsPay = /\b(is being paid|will be paid|has been paid|is paid|are paying|we are paying|paying)\b/.test(prose);
     const claimsApproval = /\b(approved|has been approved)\b/.test(prose) && !/not (yet )?approved|needs? (two )?approv|waiting for/.test(prose);
-    if ((plan.status === "blocked" || plan.status === "needs_info") && claimsPay) {
+    if ((plan.status === "blocked" || plan.status === "needs_info" || onHold) && claimsPay) {
       feedback = "\n\nRejected: the payout is blocked or on hold, so it is NOT being paid. Say it must not be paid, and why.";
       continue;
     }

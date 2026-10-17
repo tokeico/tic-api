@@ -11,7 +11,7 @@ import type { Invoice, Objective, OfframpType, Plan, Policy, Reroute } from "../
 import { loadReferenceData, type ReferenceData } from "./data";
 import { DEFAULT_POLICY } from "./policy";
 import { quote } from "./quote";
-import { activeRules, diffPlans, plan, type ScreeningInput } from "./rules/engine";
+import { activeRules, diffPlans, plan, type SanctionsInput, type ScreeningInput } from "./rules/engine";
 import { loadSdnList, screenName, type ScreeningResult, type SdnList } from "./screen";
 import { canonicalJSON, sha256Hex } from "./util";
 
@@ -70,12 +70,14 @@ export interface PlanPayoutInput {
   asOf: string;
   /** Latest screening for this payee (screen once, store it, reuse it on re-plans). */
   screening: ScreeningInput;
+  /** Recorded sanctions sign-off, if any: releases (or confirms) a `liftedBy` policy hold. */
+  sanctions?: SanctionsInput | null;
   policy?: Policy;
   options?: PlanOptions;
 }
 
 /** quote + rules engine with the loaded reference data. Synchronous and pure. */
-export function planPayout({ payoutId, invoice, asOf, screening, policy = DEFAULT_POLICY, options = {} }: PlanPayoutInput): Plan {
+export function planPayout({ payoutId, invoice, asOf, screening, sanctions = null, policy = DEFAULT_POLICY, options = {} }: PlanPayoutInput): Plan {
   const r = reference();
   const off = new Set(options.disabledOfframps ?? []);
   const offramps = r.offramps
@@ -86,6 +88,7 @@ export function planPayout({ payoutId, invoice, asOf, screening, policy = DEFAUL
     invoice,
     asOf,
     screening,
+    sanctions,
     policy,
     objective: options.objective,
     routes: quote(invoice, { offramps, fx: r.fx }),

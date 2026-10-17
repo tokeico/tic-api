@@ -119,6 +119,13 @@ export const Rule = z.object({
   outcome: Outcome.exclude(["pass"]),
   message: z.string(),
   source: Source,
+  /**
+   * Marks a block as a policy hold that a human can lift in the app. Only
+   * "sanctions_signoff" exists today (VE-OFAC): a compliance reviewer records
+   * what OFAC requires — nobody blocked is involved, or a general license
+   * covers it — and the hold becomes a warning naming the sign-off.
+   */
+  liftedBy: z.enum(["sanctions_signoff"]).optional(),
 });
 export type Rule = z.infer<typeof Rule>;
 
@@ -225,6 +232,48 @@ export const ScreeningReviewRequest = z.object({
 });
 export type ScreeningReviewRequest = z.infer<typeof ScreeningReviewRequest>;
 
+/**
+ * POST /api/payouts/:id/sanctions-review. Releases a sanctions policy hold
+ * (VE-OFAC, `liftedBy: "sanctions_signoff"`) or confirms it. A release covers
+ * the payee as named and the bank details as reviewed: editing either puts
+ * the hold back on the next plan.
+ */
+export const SanctionsReviewRequest = z.object({
+  reviewer: z.string().min(1), // user id, name or email (controller / approver only)
+  decision: z.enum(["released", "confirmed_blocked"]),
+  /** OFAC general license relied on, e.g. "GL 57". Optional: the release can rest on "nobody blocked is involved". */
+  licenseRef: z.string().trim().min(1).max(60).optional(),
+  note: z.string().trim().min(1, "say what was checked"),
+});
+export type SanctionsReviewRequest = z.infer<typeof SanctionsReviewRequest>;
+
+// ---- Security hold (prompt-injection defense) -------------------------------------
+
+/** One instruction-like line found in an invoice's text. The quote is evidence: the person reads exactly what it says. */
+export const SecurityFinding = z.object({
+  pattern: z.string(), // scanner pattern name, e.g. "instruction-override"
+  quote: z.string(),
+});
+export type SecurityFinding = z.infer<typeof SecurityFinding>;
+
+export const SecurityHold = z.object({
+  findings: z.array(SecurityFinding),
+  status: z.enum(["active", "cleared", "confirmed_suspicious"]),
+  reviewedBy: z.string().nullable().optional(), // name, when a person has decided
+  reviewedAt: z.string().nullable().optional(),
+  reviewNote: z.string().nullable().optional(),
+  flaggedAt: z.string(),
+});
+export type SecurityHold = z.infer<typeof SecurityHold>;
+
+/** POST /api/payouts/:id/security-review. A person clears the security hold or keeps the payout held. */
+export const SecurityReviewRequest = z.object({
+  reviewer: z.string().min(1), // user id, name or email (controller / approver only)
+  decision: z.enum(["cleared", "confirmed_suspicious"]),
+  note: z.string().trim().min(1, "say why"),
+});
+export type SecurityReviewRequest = z.infer<typeof SecurityReviewRequest>;
+
 // ---- Rails, reconciliation and books -------------------------------------------------
 
 export const RailMode = z.enum(["mock", "bridge", "blindpay"]);
@@ -285,6 +334,9 @@ export const AuditEventType = z.enum([
   "reconciled",
   "asof_changed",
   "settings_changed",
+  "sanctions_reviewed",
+  "security_flagged",
+  "security_reviewed",
 ]);
 export type AuditEventType = z.infer<typeof AuditEventType>;
 
@@ -329,6 +381,8 @@ export const PayoutSummary = z.object({
   status: PayoutStatus,
   warnings: z.number().int(),
   recommended: RouteSummary.nullable(),
+  /** True while an active security hold gates approval (the pill reads "Security hold"). */
+  onSecurityHold: z.boolean().optional(),
 });
 export type PayoutSummary = z.infer<typeof PayoutSummary>;
 
@@ -337,6 +391,19 @@ export const PayoutDetail = PayoutSummary.extend({
   plan: Plan.nullable(), // null while status = draft
   memo: Memo.nullable(),
   approvals: z.array(z.object({ approver: z.string(), role: z.enum(["first", "second"]), at: z.string() })),
+  /** Latest compliance sign-off on the sanctions policy hold, once one exists. */
+  sanctionsReview: z
+    .object({
+      decision: z.enum(["released", "confirmed_blocked"]),
+      licenseRef: z.string().nullable(),
+      by: z.string(),
+      at: z.string(),
+      note: z.string(),
+    })
+    .nullable()
+    .optional(),
+  /** Latest security hold (flagged instruction-like text), once one exists. */
+  securityHold: SecurityHold.nullable().optional(),
   /** First 16 hex chars of the plan's sha256: same inputs and date always give the same one. */
   fingerprint: z.string().nullable().optional(),
   payment: z
