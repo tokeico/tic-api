@@ -74,8 +74,9 @@ suite("payouts API (Postgres)", () => {
     const reroute = async (asOf: string) => (await post(`/api/plan-all?asOf=${asOf}`)).json.reroutes as Json[];
     expect(await reroute("2026-09-30")).toMatchObject([{ payoutId: ids.br, to: "BR:usdc-base:br-pagafx", ruleId: "BR-561-EFX" }]);
     expect(await reroute("2026-10-01")).toMatchObject([{ payoutId: ids.br, to: "BR:usdc-base:br-ponte", ruleId: "BR-561-EFX" }]);
-    expect(await reroute("2026-10-30")).toMatchObject([{ payoutId: ids.br, to: "BR:usdc-base:br-sol", ruleId: "BR-VASP-AUTH" }]);
-    expect(await reroute("2026-10-30")).toEqual([]); // same date again: no change
+    expect(await reroute("2026-10-30")).toEqual([]); // still a valid BCB filing day: Ponte stays
+    expect(await reroute("2026-10-31")).toMatchObject([{ payoutId: ids.br, to: "BR:usdc-base:br-sol", ruleId: "BR-VASP-AUTH" }]);
+    expect(await reroute("2026-10-31")).toEqual([]); // same date again: no change
     await reroute("2026-10-17");
     expect((await get(`/api/payouts/${ids.br}`)).json.plan.asOf).toBe("2026-10-17");
   });
@@ -133,7 +134,7 @@ suite("payouts API (Postgres)", () => {
     expect((await call("PATCH", `/api/payouts/${ids.br}`, { description: "changed" })).json.error.code).toBe("plan_locked");
     expect((await post(`/api/payouts/${ids.br}/plan`)).json.error.code).toBe("plan_locked");
     const before = (await get(`/api/payouts/${ids.br}`)).json.plan;
-    const moved = await post("/api/plan-all?asOf=2026-10-30");
+    const moved = await post("/api/plan-all?asOf=2026-10-31");
     expect(moved.json.reroutes).toEqual([]);
     expect((await get(`/api/payouts/${ids.br}`)).json.plan).toEqual(before);
     await post("/api/plan-all?asOf=2026-10-17");
@@ -212,8 +213,10 @@ suite("payouts API (Postgres)", () => {
   test("rules, screening and settings for the top bar", async () => {
     const ids = async (asOf: string) => ((await get(`/api/rules?asOf=${asOf}`)).json as Json[]).map((r) => r.id);
     expect(await ids("2026-09-30")).not.toContain("BR-561-EFX");
-    expect(await ids("2026-10-30")).toEqual(expect.arrayContaining(["BR-561-EFX", "BR-VASP-AUTH"]));
-    expect(await ids("2026-10-30")).not.toContain("BR-VASP-PENDING-WARN");
+    // Oct 30 is the BCB filing deadline: non-filers are warned that day and blocked from Oct 31.
+    expect(await ids("2026-10-30")).toEqual(expect.arrayContaining(["BR-561-EFX", "BR-VASP-UNFILED-WARN", "BR-VASP-PENDING-WARN"]));
+    expect(await ids("2026-10-30")).not.toContain("BR-VASP-AUTH");
+    expect(await ids("2026-10-31")).toEqual(expect.arrayContaining(["BR-VASP-AUTH", "BR-VASP-PENDING-WARN"]));
     expect((await get("/api/rules?asOf=2026-13-01")).json.error.code).toBe("invalid_as_of");
 
     expect((await get("/api/screen?name=Lucía%20Fernández")).json).toMatchObject({ status: "clear" });
