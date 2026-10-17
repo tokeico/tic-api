@@ -119,3 +119,5 @@ PostgreSQL + Drizzle ORM (`drizzle-orm/bun-sql`, which uses `Bun.SQL`), run with
 **Read `DATABASE.md` before touching the schema, migrations or deployment.**
 Short version: edit `src/db/schema.ts`, run `bun run db:generate`, run `bun run db:migrate`, then commit `drizzle/`.
 Import `db` from `src/db`. Never use `db:push` against shared or production databases.
+JSON columns: use `jsonb` from `src/db/jsonb.ts`, never drizzle's built-in one (it double-encodes under Bun.SQL).
+Reset demo data with `bun run db:seed`.

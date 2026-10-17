@@ -4,11 +4,12 @@
     "dev": "bun run --hot src/index.ts",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d --wait db && bun run db:migrate",
+    "db:reset": "docker compose down -v && docker compose up -d --wait db && bun run db:migrate && bun run db:seed",
     "db:logs": "docker compose logs -f db",
     "db:psql": "docker compose exec db sh -c 'psql -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\"'",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts",
+    "db:seed": "bun run src/db/seed.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
   },

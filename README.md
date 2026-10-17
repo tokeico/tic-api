@@ -14,7 +14,7 @@ open http://localhost:3000
 
 ```sh
 cp .env.example .env
-bun run db:up && bun run db:migrate
+bun run db:up && bun run db:migrate && bun run db:seed
 ```
 
 See [DATABASE.md](./DATABASE.md) for the full workflow and deployment guide.
