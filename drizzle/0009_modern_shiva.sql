@@ -29,7 +29,9 @@ DECLARE
 BEGIN
   FOR s IN SELECT nspname FROM pg_namespace WHERE nspname ~ '^w_[a-f0-9]{32}$' LOOP
     EXECUTE format('CREATE TABLE IF NOT EXISTS %I.vendors (LIKE public.vendors INCLUDING ALL)', s);
-    EXECUTE format('ALTER TABLE %I.vendors ADD CONSTRAINT vendors_verified_by_users_id_fk FOREIGN KEY (verified_by) REFERENCES %I.users(id) ON DELETE no action ON UPDATE no action', s, s);
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vendors_verified_by_users_id_fk' AND connamespace = s::regnamespace) THEN
+      EXECUTE format('ALTER TABLE %I.vendors ADD CONSTRAINT vendors_verified_by_users_id_fk FOREIGN KEY (verified_by) REFERENCES %I.users(id) ON DELETE no action ON UPDATE no action', s, s);
+    END IF;
     EXECUTE format('ALTER TABLE %I.approvals ADD COLUMN IF NOT EXISTS acknowledged_warnings text[] NOT NULL DEFAULT ''{}''', s);
     EXECUTE format($v$INSERT INTO %I.vendors (country, tax_id, name, bank_id_type, bank_id_value, verified_by, verified_at, verification_note, source) VALUES
       ('BR', '12345678000195', 'Estúdio Paulista Design Ltda', 'pix', '7d9f0a52-3c1e-4b8a-9e6f-2a4c8b1d5e30', NULL, now(), 'Demo vendor record (seeded)', 'seed'),
