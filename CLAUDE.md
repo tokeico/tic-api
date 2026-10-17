@@ -125,3 +125,10 @@ Reset demo data with `bun run db:seed`.
 ## Agent (local LLM)
 
 The Agent tab uses a local model in Ollama with read-only tools. **Read `docs/AGENT.md` before touching `src/llm/`.** Never add a tool that acts; actions go through `propose_action` for a person to confirm.
+
+## Authenticated database context and verification
+
+- Application services use the request-scoped `db`; direct service callers must enter `withWorkspace` with a verified principal. `adminDb` is reserved for identity administration and migration/maintenance scripts, never a fallback for unauthenticated application requests.
+- Use `bun run test`, `bun run test:workflow`, or `bun run test:auth`. The runner initializes separate processes with local `*_test` database URLs before modules load, so the remote application database cannot be selected accidentally. The workspace-reset test requires explicit `--include-reset`.
+- Workspace provisioning clones the listed application tables and reinstalls foreign keys and append-only audit triggers. Schema changes must account for existing workspace schemas as well as `public`; root migrations alone do not upgrade tenant tables.
+- Authenticated accounts and name screening are not KYC/KYB completion. Do not claim provider-verified identities or collect real identity documents without a verification provider and secure storage.

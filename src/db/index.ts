@@ -11,6 +11,8 @@ if (!url) {
 }
 
 export const client = new SQL(url);
+const configuredUrl = new URL(url);
+export const databaseMatches = (target: string) => configuredUrl.href === new URL(target).href;
 export const adminDb = drizzle({ client, schema });
 type Transaction = Parameters<Parameters<typeof adminDb.transaction>[0]>[0];
 const context = new AsyncLocalStorage<{ transaction: Transaction; principal: Principal | null }>();

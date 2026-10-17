@@ -23,14 +23,14 @@ Read it before changing the schema or deploying.
 
 ## Tests that use the database
 
-`test/payouts.test.ts` runs the whole payout workflow over HTTP against a real Postgres. It wipes and reseeds the database named by `TEST_DATABASE_URL`, and refuses to run unless that name ends in `_test`, so it can never touch the demo data. One-time setup:
+`test/payouts.test.ts` runs the authenticated payout workflow over HTTP against PostgreSQL in a newly created workspace. `test/auth.test.ts` covers accounts, sessions, invitations, workspace isolation and read-only MCP/API keys. Both require a dedicated local `*_test` database. One-time setup:
 
 ```sh
 docker compose exec db psql -U tic -d postgres -c "CREATE DATABASE tic_test"
 DATABASE_URL=postgres://tic:tic@localhost:5432/tic_test bun run db:migrate
 ```
 
-Without `TEST_DATABASE_URL`, that file is skipped and `bun test` still passes.
+Use `bun run test`, `bun run test:workflow`, or `bun run test:auth`. The runner overrides `DATABASE_URL` in separate test processes before database modules initialize, even when the application uses a remote database. `TEST_AUTH_DATABASE_URL` optionally selects a different local test database for auth tests. Without test URLs, `bun run test` runs only unit tests. The reset integration test is excluded unless explicitly requested with `--include-reset`.
 
 ## Environment variables
 
@@ -167,8 +167,7 @@ Neon, Supabase, Railway, Render, RDS and similar.
    bun install --frozen-lockfile
    bun run db:migrate
    ```
-   For the hosted demo DB, also seed once: `SEED_ALLOW_REMOTE=1 bun run db:seed`.
-   This wipes the data, which is also how you reset it before the pitch.
+New accounts create their own workspace and fictional invoices. Do not run `db:seed` or enable remote seeding as part of deployment.
 4. Start the app: `bun run src/index.ts`.
 
 You don't need Docker in this setup.

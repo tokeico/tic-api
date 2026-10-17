@@ -398,7 +398,7 @@ export const PayoutDetail = PayoutSummary.extend({
   invoice: Invoice,
   plan: Plan.nullable(), // null while status = draft
   memo: Memo.nullable(),
-  approvals: z.array(z.object({ approver: z.string(), role: z.enum(["first", "second"]), at: z.string() })),
+  approvals: z.array(z.object({ approver: z.string(), approverId: z.string().uuid().optional(), role: z.enum(["first", "second"]), at: z.string() })),
   /** Latest compliance sign-off on the sanctions policy hold, once one exists. */
   sanctionsReview: z
     .object({

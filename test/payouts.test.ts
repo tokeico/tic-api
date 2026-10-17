@@ -58,6 +58,7 @@ suite("payouts API (Postgres)", () => {
     process.env.AUDIT_PUBLIC_KEY = publicKey.export({ format: "der", type: "spki" }).toString("base64");
 
     dbmod = await import("../src/db");
+    if (!dbmod.databaseMatches(url!)) throw new Error("Start this test with DATABASE_URL set to TEST_DATABASE_URL. Use bun run test:workflow.");
     audit = await import("../src/services/audit-log");
     audit.resetAuditKeys();
     app = (await import("../src/index")).app;

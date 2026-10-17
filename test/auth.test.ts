@@ -49,6 +49,7 @@ suite("database authentication and workspace isolation", () => {
     process.env.AUDIT_SIGNING_KEY = pair.privateKey.export({ format: "der", type: "pkcs8" }).toString("base64");
     process.env.AUDIT_PUBLIC_KEY = pair.publicKey.export({ format: "der", type: "spki" }).toString("base64");
     database = await import("../src/db");
+    if (!database.databaseMatches(url!)) throw new Error("Start this test with DATABASE_URL set to TEST_AUTH_DATABASE_URL. Use bun run test:auth.");
     security = await import("../src/security/auth");
     app = (await import("../src/index")).app;
   });
@@ -142,7 +143,7 @@ suite("database authentication and workspace isolation", () => {
     const invitation = await call("/api/auth/invitations", { method: "POST", cookie, body: { email, role: "approver" } });
     expect(invitation.status).toBe(201);
     expect((await call("/api/auth/invitations", { method: "POST", cookie, body: { email, role: "controller" } })).status).toBe(400);
-    approverName = `Test Approver ${suffix}`;
+    approverName = owner.name;
     const registered = await call("/api/auth/signup", { method: "POST", body: { name: approverName, email, password, invitation: invitation.body.invitation } });
     expect(registered.status).toBe(201);
     approverCookie = registered.cookie;
@@ -152,6 +153,7 @@ suite("database authentication and workspace isolation", () => {
     expect(second.status).toBe(200);
     expect(second.body.status).toBe("approved");
     expect(second.body.approvals.map((a: Record<string, any>) => a.approver)).toEqual([owner.name, approverName]);
+    expect(second.body.approvals[0].approverId === second.body.approvals[1].approverId).toBe(false);
     expect((await call("/api/auth/invitations", { method: "POST", cookie: approverCookie, body: { email: "another@example.test", role: "approver" } })).status).toBe(403);
   });
 

@@ -178,7 +178,7 @@ function toDetail(p: FullPayout): PayoutDetail {
       : null,
     approvals: p.approvals
       .filter((a) => a.decision === "approved")
-      .map((a) => ({ approver: a.approver.name, role: a.role, at: a.createdAt.toISOString() })),
+      .map((a) => ({ approver: a.approver.name, approverId: a.approverId, role: a.role, at: a.createdAt.toISOString() })),
     ...(pay
       ? { payment: { txHash: pay.txHash, offrampRef: pay.offrampRef, railRef: pay.railRef ?? "", railMode: pay.railMode } }
       : {}),

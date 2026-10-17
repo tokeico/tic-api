@@ -15,11 +15,21 @@ Before starting the API, paste the generated `AUDIT_HMAC_KEY`, `AUDIT_SIGNING_KE
 ```sh
 bun run db:up
 bun run db:migrate
-bun run db:seed
 bun run dev
 ```
 
-The API runs on http://localhost:3000. In another terminal, follow the [web setup](../tic-web/README.md).
+The API runs on http://localhost:3000. In another terminal, follow the [web setup](../tic-web/README.md). Create an account in the web app: sign-up creates a separate workspace and its fictional demo invoices. No shared seed or default account is needed. Do not seed or reset a remote database.
+
+## Accounts, API access and MCP
+
+- `/api/auth/signup`, `/api/auth/signin`, and `/api/auth/signout` provide database-backed accounts and HTTP-only cookie sessions. Passwords use Argon2id; only hashes of session and API tokens are stored.
+- All application API routes require a valid session or workspace-bound bearer key, except `/api/health`. Browser mutations must send the configured `WEB_ORIGIN`.
+- Account management in the web app supports invitations, workspace switching, and read-only API keys. A second payment approver must use a different real account. Client-supplied actor names do not choose the recorded identity.
+- `/mcp` uses Streamable HTTP with bearer authentication. Tools can list payouts, read payout details, preview dated routes, list cited rules, read the Ledger, and verify audit evidence. They cannot approve, pay, change policy, or clear holds.
+- Each workspace has separate payout, cache, settings, Ledger and audit tables. Resetting one sandbox does not reset another workspace or remove its authenticated members.
+- Sign-up is not KYC. Business verification, beneficial-owner checks and supplier identity verification still need a dedicated workflow and verification provider before real-world use.
+
+For deployment, set `WEB_ORIGIN` to the exact HTTPS web origin and keep audit keys stable in the platform’s secret store. HTTPS/production sessions use Secure, HTTP-only, SameSite=Lax cookies. Configure the web server’s `API_ORIGIN` to reach this API; its same-origin proxy forwards `/api/*` and `/mcp`.
 
 Before presenting, check http://localhost:3000/api/health. Expect `"db": true`. If the first demo action reports `AUDIT_HMAC_KEY is not set`, complete the key-generation step above and restart the API.
 
@@ -55,7 +65,9 @@ Migrations apply automatically at start, but the demo data needs a one-off seed:
 bun test test/rules.test.ts test/corredor.test.ts test/audit.test.ts test/rails.test.ts test/agent.test.ts test/presentation.test.ts
 ```
 
-The PostgreSQL integration suite in `test/payouts.test.ts` additionally needs a dedicated `*_test` database. It wipes and reseeds that database; see `.env.example` for setup.
+Run `bun run test` for unit, authenticated-workflow and auth/MCP suites. Integration tests require a migrated local `*_test` database in `TEST_DATABASE_URL`; `TEST_AUTH_DATABASE_URL` can optionally use another local test database. `bun run test:workflow` and `bun run test:auth` run them separately. The runner sets the database before modules load and never uses the application’s remote `DATABASE_URL`.
+
+Workflow tests create a new isolated workspace rather than reseeding the shared database. The destructive sandbox-reset test is excluded by default; `bun run test:workflow --include-reset` deliberately opts into resetting only that run’s fixture workspace. Never point tests at a shared or production database.
 
 ## Fictional presentation screening
 

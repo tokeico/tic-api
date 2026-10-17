@@ -56,7 +56,7 @@ app.use("/mcp", requireWorkspace);
 app.all("/mcp", (c) => handleMcp(c.req.raw));
 
 app.get("/", (c) => {
-    return c.text("Hello Hono!");
+    return c.json({ name: "Corredor API", health: "/api/health", mcp: "/mcp", authentication: "Cookie sessions for the application; workspace-bound read-only bearer keys for API and MCP clients." });
 });
 
 app.route("/api/payouts", payoutRoutes);
