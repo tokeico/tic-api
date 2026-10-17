@@ -1,72 +1,78 @@
-import { createHash } from "node:crypto";
-import type { Invoice, RailAdapter, RailSendInput, Route } from "./adapter";
+// Deterministic mock rail. IDs are derived from the payout id, so paying the
+// same payout twice in a demo gives the same references. A small simulated
+// rate move makes the journal's FX line non-zero.
+// No money moves. The UI must show the "Simulated" badge (rail_mode = mock).
 
-// Demo booking rates from ARCHITECTURE §7 (data/fx.json). ARS uses the official rate.
-const BOOKING_RATES: Record<string, number> = {
-  BRL: 5.4,
-  MXN: 18.5,
-  ARS: 1350,
-  USD: 1,
-};
+import type { LocalRail } from "../../contracts";
+import type { FxTable } from "../data";
+import { rateFor } from "../quote";
+import { sha256Hex } from "../util";
+import type { RailAdapter, SendRequest, SendResult } from "./adapter";
 
-const LOCAL_RAIL_CURRENCY: Record<Route["rail"], string | null> = {
-  pix: "BRL",
-  spei: "MXN",
-  cvu: "ARS",
-  pse: "COP",
-  swift: null,
-};
+const ALNUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-export function bookingRate(payee: Pick<Invoice, "currency">, route: Pick<Route, "rail">): number {
-  if (payee.currency !== "USD") return BOOKING_RATES[payee.currency] ?? 1;
-  const local = LOCAL_RAIL_CURRENCY[route.rail];
-  if (local) return BOOKING_RATES[local] ?? 1;
-  return 1;
+/** Deterministic pseudo-random bytes from a seed (sha256 counter mode). */
+function bytes(seed: string, n: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; out.length < n; i++) {
+    const h = sha256Hex(`${seed}:${i}`);
+    for (let j = 0; j < h.length && out.length < n; j += 2) out.push(parseInt(h.slice(j, j + 2), 16));
+  }
+  return out;
 }
 
-function digest(payoutId: string): string {
-  return createHash("sha256").update(payoutId).digest("hex");
-}
+const alnum = (seed: string, n: number) => bytes(seed, n).map((b) => ALNUM[b % 36]).join("");
+const digits = (seed: string, n: number) => bytes(seed, n).map((b) => String(b % 10)).join("");
 
-function round(value: number, digits: number): number {
-  const places = 10 ** digits;
-  return Math.round(value * places) / places;
-}
-
-function railRef(rail: Route["rail"], hex: string): string {
-  const upper = hex.toUpperCase();
+/** Local-rail reference shaped like the real thing. */
+export function mockRailRef(rail: LocalRail, payoutId: string): string {
   switch (rail) {
-    case "pix":
-      return `E${upper.slice(0, 31)}`;
-    case "spei":
-      return `SPEI${upper.slice(0, 18)}`;
-    case "cvu":
-      return `CVU${upper.slice(0, 22)}`;
+    case "pix": // Pix end-to-end id: "E" + 31 alphanumerics
+      return `E${alnum(`${payoutId}:pix`, 31)}`;
+    case "spei": // SPEI clave de rastreo (up to 30 chars)
+      return `CORR${alnum(`${payoutId}:spei`, 20)}`;
+    case "cvu": // Coelsa transfer id
+      return `COELSA-${digits(`${payoutId}:cvu`, 16)}`;
     case "pse":
-      return `PSE${upper.slice(0, 20)}`;
-    case "swift":
-      return `SWIFT${upper.slice(0, 16)}`;
+      return `PSE${digits(`${payoutId}:pse`, 14)}`;
+    case "swift": { // UETR (UUID v4 shape)
+      const h = sha256Hex(`${payoutId}:uetr`);
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    }
   }
 }
 
-export function mockSend(input: RailSendInput): RailSendResult {
-  const hex = digest(input.payoutId);
-  const booking = bookingRate(input.payee, input.route);
-  // 1.0001–1.0040, derived from the digest so the FX line is never zero.
-  const factor = 1 + ((Number.parseInt(hex.slice(0, 2), 16) % 40) + 1) / 10_000;
-  const settleRate = round(booking * factor, 6);
-  return {
-    txHash: `0x${hex}`,
-    offrampRef: `off_${hex.slice(0, 16)}`,
-    railRef: railRef(input.route.rail, hex),
-    settleRate,
-    settledLocal: round(input.amountUsd * settleRate, 2),
-  };
+/** Simulated move between booking and settlement: -0.50% .. +0.50%. */
+export function mockRateMove(payoutId: string): number {
+  const [hi, lo] = bytes(`${payoutId}:fx`, 2) as [number, number];
+  return (((hi << 8) | lo) / 65535 - 0.5) / 100;
 }
 
-export const mockRail: RailAdapter = {
-  mode: "mock",
-  send(input) {
-    return Promise.resolve(mockSend(input));
-  },
-};
+export interface MockRailOptions {
+  fx: FxTable;
+  /** Clock for settledAt. Injected so tests are deterministic. */
+  now?: () => Date;
+}
+
+export function createMockRail({ fx, now = () => new Date() }: MockRailOptions): RailAdapter {
+  return {
+    mode: "mock",
+    simulated: true,
+    async send({ payoutId, route, payee }: SendRequest): Promise<SendResult> {
+      const bookingRate = rateFor(payee.currency, fx);
+      // USD-denominated invoices carry no FX exposure.
+      const settleRate =
+        payee.currency === "USD" ? 1 : Math.round(bookingRate * (1 + mockRateMove(payoutId)) * 1e6) / 1e6;
+      const stablecoin = route.kind === "stablecoin";
+      return {
+        txHash: stablecoin ? `0x${sha256Hex(payoutId)}` : null,
+        offrampRef: stablecoin && route.offramp ? `${route.offramp.id.toUpperCase()}-${alnum(`${payoutId}:offramp`, 12)}` : null,
+        railRef: mockRailRef(route.rail, payoutId),
+        // Payout APIs deliver the exact destination amount; the USD cost moves with the rate.
+        settledLocal: payee.amount,
+        settleRate,
+        settledAt: now().toISOString(),
+      };
+    },
+  };
+}

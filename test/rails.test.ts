@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { bookingRate, mockSend, railFor, RailModeError } from "../src/corredor/rails";
-import type { Invoice, Route } from "../src/corredor/rails/adapter";
+import type { Invoice, Route } from "../src/contracts";
+import { createMockRail, getRailAdapter, parseRailMode, RailModeError, RailNotAvailableError, reference } from "../src/corredor";
 
 const payee: Invoice = {
   invoiceNumber: "INV-1",
@@ -21,6 +21,7 @@ const route: Route = {
   kind: "stablecoin",
   asset: "USDC",
   network: "base",
+  offramp: null,
   rail: "pix",
   feePct: 0.7,
   feeUsd: 110.19,
@@ -29,41 +30,41 @@ const route: Route = {
 };
 
 const input = { payoutId: "payout-br-1", route, amountUsd: route.amountUsd, payee };
+const { fx } = reference();
+const rail = createMockRail({ fx, now: () => new Date("2026-10-17T15:00:00.000Z") });
 
 describe("mock rail", () => {
   test("same payout id is byte-identical", async () => {
-    const first = await mockSend(input);
-    const second = await mockSend(input);
+    const first = await rail.send(input);
+    const second = await rail.send(input);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
   });
 
-  test("tx hash and pix rail ref match the spec shapes", () => {
-    const sent = mockSend(input);
+  test("tx hash and pix rail ref match the spec shapes", async () => {
+    const sent = await rail.send(input);
     expect(sent.txHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(sent.railRef).toMatch(/^E[A-Z0-9]{31}$/);
-    expect(sent.offrampRef.startsWith("off_")).toBe(true);
   });
 
-  test("different payout ids differ", () => {
-    const other = mockSend({ ...input, payoutId: "payout-br-2" });
-    expect(JSON.stringify(mockSend(input))).not.toBe(JSON.stringify(other));
+  test("different payout ids differ", async () => {
+    const other = await rail.send({ ...input, payoutId: "payout-br-2" });
+    expect(JSON.stringify(await rail.send(input))).not.toBe(JSON.stringify(other));
   });
 
-  test("settle rate moves off the booking rate", () => {
-    const booking = bookingRate(payee, route);
-    const sent = mockSend(input);
-    expect(booking).toBe(5.4);
-    expect(sent.settleRate).not.toBe(booking);
-    expect(sent.settledLocal).toBe(Math.round(input.amountUsd * sent.settleRate * 100) / 100);
+  test("settle rate moves off the booking rate", async () => {
+    const sent = await rail.send(input);
+    expect(fx.rates.BRL).toBe(5.4);
+    expect(sent.settleRate).not.toBe(5.4);
+    expect(sent.settledLocal).toBe(payee.amount);
   });
 });
 
-describe("railFor", () => {
+describe("getRailAdapter", () => {
   test("defaults to mock when RAIL_MODE is unset", () => {
     const previous = process.env.RAIL_MODE;
     delete process.env.RAIL_MODE;
     try {
-      expect(railFor().mode).toBe("mock");
+      expect(getRailAdapter(fx).mode).toBe("mock");
     } finally {
       if (previous === undefined) delete process.env.RAIL_MODE;
       else process.env.RAIL_MODE = previous;
@@ -71,14 +72,16 @@ describe("railFor", () => {
   });
 
   test("rejects an unknown mode", () => {
-    expect(() => railFor("wire")).toThrow(RailModeError);
+    expect(() => parseRailMode("wire")).toThrow(RailModeError);
   });
 
   test("bridge refuses to pay without an API key", async () => {
     const previous = process.env.BRIDGE_API_KEY;
     delete process.env.BRIDGE_API_KEY;
     try {
-      await expect(railFor("bridge").send(input)).rejects.toThrow(/BRIDGE_API_KEY/);
+      const sent = getRailAdapter(fx, "bridge").send(input);
+      await expect(sent).rejects.toThrow(RailNotAvailableError);
+      await expect(sent).rejects.toThrow(/BRIDGE_API_KEY/);
     } finally {
       if (previous === undefined) delete process.env.BRIDGE_API_KEY;
       else process.env.BRIDGE_API_KEY = previous;

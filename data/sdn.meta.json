@@ -1,0 +1,9 @@
+{
+  "_note": "OFAC SDN snapshot committed as a fallback (ARCHITECTURE §15). Refresh with: bun run scripts/sdn-update.ts",
+  "version": "OFAC SDN 2026-10-17",
+  "downloadedAt": "2026-10-17",
+  "sources": [
+    "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV",
+    "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/ALT.CSV"
+  ]
+}

@@ -1,17 +1,12 @@
-import type { RailAdapter } from "./adapter";
+import { RailNotAvailableError, type RailAdapter } from "./adapter";
 
 export const blindpayRail: RailAdapter = {
   mode: "blindpay",
-  send() {
+  simulated: false,
+  async send() {
     if (!process.env.BLINDPAY_API_KEY) {
-      return Promise.reject(
-        new Error(
-          "BLINDPAY_API_KEY is not set. Refusing to pay through BlindPay. Set RAIL_MODE=mock or provide a sandbox key.",
-        ),
-      );
+      throw new RailNotAvailableError("blindpay", "BLINDPAY_API_KEY is not set; use RAIL_MODE=mock or provide a sandbox key");
     }
-    return Promise.reject(
-      new Error("BlindPay sandbox client is not implemented. Set RAIL_MODE=mock."),
-    );
+    throw new RailNotAvailableError("blindpay", "sandbox integration not implemented yet; use RAIL_MODE=mock");
   },
 };

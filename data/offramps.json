@@ -1,0 +1,19 @@
+{
+  "_note": "DEMO DATA. Fictional providers for the hackathon demo. Not real companies, licenses or fees.",
+  "offramps": [
+    { "id": "br-pagafx", "name": "PagaFX", "country": "BR", "type": "efx", "feePct": 0.55,
+      "assets": ["USDC"], "networks": ["base"], "rail": "pix", "minutes": 15 },
+    { "id": "br-ponte", "name": "Ponte Digital", "country": "BR", "type": "vasp_pending", "feePct": 0.70,
+      "assets": ["USDC"], "networks": ["base"], "rail": "pix", "minutes": 20 },
+    { "id": "br-sol", "name": "Sol VASP", "country": "BR", "type": "vasp_authorized", "feePct": 0.85,
+      "assets": ["USDC"], "networks": ["base", "arbitrum"], "rail": "pix", "minutes": 10 },
+    { "id": "mx-puente", "name": "Puente MX", "country": "MX", "type": "nonbank_licensed", "feePct": 0.60,
+      "assets": ["USDC"], "networks": ["base"], "rail": "spei", "minutes": 10 },
+    { "id": "mx-bancoazul", "name": "Banco Azul", "country": "MX", "type": "bank", "feePct": 0.40,
+      "assets": ["USDC"], "networks": ["base"], "rail": "spei", "minutes": 30 },
+    { "id": "ar-pampa", "name": "Pampa PSAV", "country": "AR", "type": "psav_registered", "feePct": 1.10,
+      "assets": ["USDT"], "networks": ["tron"], "rail": "cvu", "minutes": 15 },
+    { "id": "ar-cueva", "name": "Cueva P2P", "country": "AR", "type": "p2p_unregistered", "feePct": 0.50,
+      "assets": ["USDT"], "networks": ["tron"], "rail": "cvu", "minutes": 45 }
+  ]
+}

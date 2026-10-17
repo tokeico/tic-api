@@ -1,0 +1,5 @@
+{
+  "_note": "DEMO DATA. Fixed demo FX rates (local currency per USD), not live quotes.",
+  "rates": { "BRL": 5.40, "MXN": 18.50, "ARS_official": 1350, "ARS_parallel": 1460 },
+  "wire": { "feePct": 4.5, "minutes": 2880 }
+}

@@ -92,77 +92,16 @@ export const AUDIT_EVENT_TYPES = [
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
 // ---- JSON shapes stored in jsonb columns -----------------------------------
+// Defined once in src/contracts.ts (shared with tic-web). Re-exported here so
+// schema.ts keeps a single import site.
 
-/** Output of the Claude extraction step (spec §5 `Invoice`). */
-export interface ExtractedInvoice {
-  invoiceNumber: string;
-  payeeName: string;
-  payeeCountry: Country;
-  payeeTaxId: string | null;
-  amount: number;
-  currency: string;
-  dueDate: string | null; // YYYY-MM-DD
-  bankId: { type: LocalRail; value: string } | null;
-  description: string;
-  purposeCode: string | null;
-  lowConfidence: string[];
-}
-
-export interface Offramp {
-  id: string;
-  name: string;
-  country: Country;
-  type: OfframpType;
-  feePct: number;
-  assets: Asset[];
-  networks: Network[];
-  rail: LocalRail;
-  minutes: number;
-}
-
-export interface Route {
-  id: string; // e.g. "BR:usdc-base:br-sol"
-  kind: "wire" | "stablecoin";
-  asset: Asset | null;
-  network: Network | null;
-  offramp: Offramp | null;
-  rail: LocalRail;
-  feePct: number;
-  feeUsd: number;
-  minutes: number;
-  amountUsd: number;
-}
-
-export type RuleOutcome = "pass" | "warn" | "block" | "require_fields";
-
-export interface RuleResult {
-  ruleId: string;
-  title: string;
-  outcome: RuleOutcome;
-  message: string;
-  source: { name: string; url: string };
-  effectiveFrom: string | null;
-  missingFields?: string[];
-}
-
-export interface RouteEvaluation {
-  route: Route;
-  results: RuleResult[];
-  compliant: boolean;
-}
-
-export interface Plan {
-  payoutId: string;
-  asOf: string;
-  screening: { status: ScreeningStatus; match?: string; score?: number };
-  evaluations: RouteEvaluation[];
-  recommended: Route | null;
-  status: PayoutStatus;
-  reasons: string[];
-}
-
-/** Approval policy stored in `settings` under key "policy". */
-export interface Policy {
-  secondApproverAboveUsd: number;
-  dailyCapUsd: number;
-}
+export type {
+  Invoice as ExtractedInvoice,
+  Offramp,
+  Route,
+  Outcome as RuleOutcome,
+  RuleResult,
+  RouteEvaluation,
+  Plan,
+  Policy,
+} from "../contracts";

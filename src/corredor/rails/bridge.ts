@@ -1,4 +1,10 @@
-import type { RailAdapter, RailSendResult } from "./adapter";
+// Bridge / BlindPay sandbox adapters (P1, DECISIONS D14). Only used when
+// RAIL_MODE selects them. Without credentials they fail loudly instead of
+// silently falling back, so the UI never shows a mock payment as real.
+
+import type { RailMode } from "../../contracts";
+import { RailNotAvailableError, type RailAdapter, type SendResult } from "./adapter";
+import { blindpayRail } from "./blindpay";
 
 const BRIDGE_API_URL = process.env.BRIDGE_API_URL ?? "https://api.bridge.xyz/v0/transfers";
 
@@ -6,6 +12,7 @@ type BridgeTransfer = {
   id?: string;
   source_tx_hash?: string;
   destination_tx_hash?: string;
+  updated_at?: string;
   receipt?: {
     destination_tx_hash?: string;
     exchange_rate?: string;
@@ -14,13 +21,7 @@ type BridgeTransfer = {
   };
 };
 
-function missingKey(): Error {
-  return new Error(
-    "BRIDGE_API_KEY is not set. Refusing to pay through Bridge. Set RAIL_MODE=mock or provide a sandbox key.",
-  );
-}
-
-function mapTransfer(body: BridgeTransfer, amountUsd: number): RailSendResult {
+function mapTransfer(body: BridgeTransfer, amountUsd: number): SendResult {
   const txHash = body.receipt?.destination_tx_hash ?? body.destination_tx_hash ?? body.source_tx_hash;
   const offrampRef = body.id;
   if (!txHash || !offrampRef) {
@@ -36,14 +37,16 @@ function mapTransfer(body: BridgeTransfer, amountUsd: number): RailSendResult {
     railRef: body.receipt?.url ?? offrampRef,
     settledLocal,
     settleRate,
+    settledAt: body.updated_at ?? new Date().toISOString(),
   };
 }
 
 export const bridgeRail: RailAdapter = {
   mode: "bridge",
+  simulated: false,
   async send(input) {
     const apiKey = process.env.BRIDGE_API_KEY;
-    if (!apiKey) throw missingKey();
+    if (!apiKey) throw new RailNotAvailableError("bridge", "BRIDGE_API_KEY is not set; use RAIL_MODE=mock or provide a sandbox key");
 
     const response = await fetch(BRIDGE_API_URL, {
       method: "POST",
@@ -75,3 +78,7 @@ export const bridgeRail: RailAdapter = {
     return mapTransfer((await response.json()) as BridgeTransfer, input.amountUsd);
   },
 };
+
+export function createSandboxRail(mode: Exclude<RailMode, "mock">): RailAdapter {
+  return mode === "bridge" ? bridgeRail : blindpayRail;
+}

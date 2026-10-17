@@ -1,8 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { railFor } from "../corredor/rails";
-import type { Invoice } from "../corredor/rails/adapter";
-import type { Route } from "../db/types";
+import type { Invoice, Route } from "../contracts";
+import { getRailAdapter, reference } from "../corredor";
 import { db } from "../db";
 import { payments, payouts, plans, type InvoiceRow } from "../db/schema";
 
@@ -77,7 +76,7 @@ payoutRoutes.post("/:id/pay", async (c) => {
     return c.json(error("no_amount", "Payout is missing amountUsd"), 400);
   }
 
-  const rail = railFor();
+  const rail = getRailAdapter(reference().fx);
   const payee = invoiceForRail(payout.invoice);
   const sent = await rail.send({
     payoutId: payout.id,
@@ -112,7 +111,7 @@ payoutRoutes.post("/:id/pay", async (c) => {
         txHash: sent.txHash,
         offrampRef: sent.offrampRef,
         railRef: sent.railRef,
-        settledAt: now,
+        settledAt: new Date(sent.settledAt),
       });
     });
   } catch (err) {

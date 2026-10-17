@@ -1,0 +1,342 @@
+// Corredor API contracts: zod schemas + TypeScript types shared with tic-web.
+//
+// SOURCE OF TRUTH. tic-web keeps a copy at src/lib/contracts.ts. Copy this
+// file over whenever it changes and tell the team (DECISIONS D18). Keep it
+// self-contained: the only import allowed is zod.
+//
+// Shapes follow ARCHITECTURE §5 and FRONTEND §5. Dates are "YYYY-MM-DD"
+// strings, timestamps are ISO 8601 strings, money is a plain number.
+
+import { z } from "zod";
+
+// ---- Primitives --------------------------------------------------------------
+
+export const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
+export type IsoDate = z.infer<typeof IsoDate>;
+
+export const Country = z.enum(["BR", "MX", "AR", "CO", "VE"]);
+export type Country = z.infer<typeof Country>;
+
+export const LocalRail = z.enum(["pix", "spei", "cvu", "pse", "swift"]);
+export type LocalRail = z.infer<typeof LocalRail>;
+
+export const Asset = z.enum(["USDC", "USDT"]);
+export type Asset = z.infer<typeof Asset>;
+
+export const Network = z.enum(["base", "arbitrum", "tron"]);
+export type Network = z.infer<typeof Network>;
+
+export const OfframpType = z.enum([
+  "vasp_authorized",
+  "vasp_pending",
+  "efx",
+  "bank",
+  "nonbank_licensed",
+  "psav_registered",
+  "p2p_unregistered",
+]);
+export type OfframpType = z.infer<typeof OfframpType>;
+
+// ---- Invoice -----------------------------------------------------------------
+
+export const BankId = z.object({ type: LocalRail, value: z.string() });
+export type BankId = z.infer<typeof BankId>;
+
+/** What extraction produces and a human can edit before planning. */
+export const Invoice = z.object({
+  invoiceNumber: z.string(),
+  payeeName: z.string(),
+  payeeCountry: Country,
+  payeeTaxId: z.string().nullable(), // CNPJ / RFC / CUIT / RIF
+  amount: z.number().positive(),
+  currency: z.string().regex(/^[A-Z]{3}$/, "ISO 4217 code, e.g. BRL"),
+  dueDate: IsoDate.nullable(),
+  bankId: BankId.nullable(), // Pix key, CLABE, CVU...
+  description: z.string(),
+  purposeCode: z.string().nullable(), // Brazil FX purpose code
+  lowConfidence: z.array(z.string()), // field names the model was unsure about
+});
+export type Invoice = z.infer<typeof Invoice>;
+
+/** PATCH /api/payouts/:id body. Editing a field clears it from lowConfidence. */
+export const InvoicePatch = Invoice.omit({ lowConfidence: true }).partial();
+export type InvoicePatch = z.infer<typeof InvoicePatch>;
+
+// ---- Routes and rules -----------------------------------------------------------
+
+export const Offramp = z.object({
+  id: z.string(),
+  name: z.string(),
+  country: Country,
+  type: OfframpType,
+  feePct: z.number().nonnegative(),
+  assets: z.array(Asset).min(1),
+  networks: z.array(Network).min(1),
+  rail: LocalRail,
+  minutes: z.number().int().positive(),
+});
+export type Offramp = z.infer<typeof Offramp>;
+
+export const Route = z.object({
+  id: z.string(), // e.g. "BR:usdc-base:br-sol", "BR:wire:swift"
+  kind: z.enum(["wire", "stablecoin"]),
+  asset: Asset.nullable(),
+  network: Network.nullable(),
+  offramp: Offramp.nullable(), // null for wire
+  rail: LocalRail,
+  feePct: z.number(),
+  feeUsd: z.number(),
+  minutes: z.number(),
+  amountUsd: z.number(),
+});
+export type Route = z.infer<typeof Route>;
+
+export const Outcome = z.enum(["pass", "warn", "block", "require_fields"]);
+export type Outcome = z.infer<typeof Outcome>;
+
+export const Source = z.object({ name: z.string(), url: z.url() });
+export type Source = z.infer<typeof Source>;
+
+export const CheckFn = z.enum(["always", "offrampTypeIn", "amountUsdAbove", "requireFields", "fxSpreadAbove"]);
+export type CheckFn = z.infer<typeof CheckFn>;
+
+/** One row of rules.json. */
+export const Rule = z.object({
+  id: z.string(),
+  corridor: Country,
+  title: z.string(),
+  effectiveFrom: IsoDate.nullable(),
+  effectiveTo: IsoDate.nullable(), // inclusive
+  appliesTo: z.enum(["stablecoin", "wire", "any"]),
+  check: z.object({ fn: CheckFn, params: z.record(z.string(), z.unknown()) }),
+  outcome: Outcome.exclude(["pass"]),
+  message: z.string(),
+  source: Source,
+});
+export type Rule = z.infer<typeof Rule>;
+
+export const RuleResult = z.object({
+  ruleId: z.string(),
+  title: z.string(),
+  outcome: Outcome,
+  message: z.string(),
+  source: Source,
+  effectiveFrom: IsoDate.nullable(),
+  missingFields: z.array(z.string()).optional(),
+});
+export type RuleResult = z.infer<typeof RuleResult>;
+
+export const RouteEvaluation = z.object({
+  route: Route,
+  results: z.array(RuleResult),
+  compliant: z.boolean(),
+});
+export type RouteEvaluation = z.infer<typeof RouteEvaluation>;
+
+// ---- Plan --------------------------------------------------------------------
+
+export const PayoutStatus = z.enum([
+  "draft", // created, not planned yet
+  "needs_info",
+  "blocked",
+  "awaiting_second_approver",
+  "ready",
+  "approved",
+  "rejected",
+  "paid",
+  "booked",
+]);
+export type PayoutStatus = z.infer<typeof PayoutStatus>;
+
+export const ScreeningStatus = z.enum(["clear", "possible_match", "hit"]);
+export type ScreeningStatus = z.infer<typeof ScreeningStatus>;
+
+export const Screening = z.object({
+  status: ScreeningStatus,
+  match: z.string().optional(), // matched SDN name
+  score: z.number().optional(), // 0..1
+});
+export type Screening = z.infer<typeof Screening>;
+
+/** Output of the rules engine. Deterministic: same inputs + asOf → same JSON. */
+export const Plan = z.object({
+  payoutId: z.string(),
+  asOf: IsoDate,
+  rulesVersion: z.string(),
+  screening: Screening,
+  evaluations: z.array(RouteEvaluation), // every candidate route, ranked
+  recommended: Route.nullable(), // cheapest compliant
+  status: PayoutStatus,
+  reasons: z.array(z.string()), // human-readable, from rule messages
+});
+export type Plan = z.infer<typeof Plan>;
+
+/** A recommended-route change between two plans (slider "why" toast). */
+export const Reroute = z.object({
+  payoutId: z.string(),
+  from: z.string().nullable(), // route id
+  to: z.string().nullable(), // route id
+  ruleId: z.string().nullable(), // rule that caused the change, if one did
+  reason: z.string(), // e.g. "BR-561-EFX took effect: eFX providers can't settle in stablecoins"
+});
+export type Reroute = z.infer<typeof Reroute>;
+
+// ---- Memo --------------------------------------------------------------------
+
+/** LLM (or template) explanation of a Plan. Explains, never decides. */
+export const Memo = z.object({
+  summary: z.string(),
+  routeRationale: z.string(),
+  citedRuleIds: z.array(z.string()),
+  warnings: z.array(z.string()),
+  humanChecks: z.array(z.string()),
+  vendorEmail: z.string().optional(),
+});
+export type Memo = z.infer<typeof Memo>;
+
+// ---- Policy and approvals ---------------------------------------------------------
+
+export const Policy = z.object({
+  secondApproverAboveUsd: z.number().nonnegative(),
+  dailyCapUsd: z.number().nonnegative(),
+});
+export type Policy = z.infer<typeof Policy>;
+
+export const ApproveRequest = z.object({
+  approver: z.string().min(1), // user id
+  decision: z.enum(["approved", "rejected"]).default("approved"),
+  comment: z.string().optional(),
+});
+export type ApproveRequest = z.infer<typeof ApproveRequest>;
+
+// ---- Rails, reconciliation and books -------------------------------------------------
+
+export const RailMode = z.enum(["mock", "bridge", "blindpay"]);
+export type RailMode = z.infer<typeof RailMode>;
+
+export const JournalLine = z.object({
+  lineNo: z.number().int().positive(),
+  account: z.string(),
+  description: z.string().nullable(),
+  debit: z.number().nonnegative(),
+  credit: z.number().nonnegative(),
+});
+export type JournalLine = z.infer<typeof JournalLine>;
+
+export const JournalEntry = z.object({
+  id: z.string().optional(),
+  payoutId: z.string(),
+  entryDate: IsoDate,
+  description: z.string(),
+  currency: z.literal("USD"),
+  bookingRate: z.number(), // local per USD when the invoice was booked
+  settleRate: z.number(), // local per USD at settlement
+  lines: z.array(JournalLine),
+});
+export type JournalEntry = z.infer<typeof JournalEntry>;
+
+export const ReconciliationStatus = z.enum(["matched", "exception"]);
+export type ReconciliationStatus = z.infer<typeof ReconciliationStatus>;
+
+// ---- Audit -------------------------------------------------------------------
+
+export const AuditEventType = z.enum([
+  "extracted",
+  "edited",
+  "screened",
+  "screening_reviewed",
+  "planned",
+  "memo",
+  "approved",
+  "rejected",
+  "paid",
+  "reconciled",
+  "asof_changed",
+]);
+export type AuditEventType = z.infer<typeof AuditEventType>;
+
+export const AuditEvent = z.object({
+  seq: z.number().int().positive(),
+  payoutId: z.string().nullable(),
+  type: AuditEventType,
+  payload: z.record(z.string(), z.unknown()),
+  createdAt: z.string(), // ISO 8601, millisecond precision
+  prevMac: z.string(),
+  mac: z.string(),
+  keyId: z.string(),
+});
+export type AuditEvent = z.infer<typeof AuditEvent>;
+
+export const AuditVerifyResult = z.object({
+  ok: z.boolean(),
+  count: z.number().int(),
+  brokenAt: z.number().int().optional(), // first bad seq
+  reason: z.string().optional(),
+  lastSignedSeq: z.number().int().nullable(),
+});
+export type AuditVerifyResult = z.infer<typeof AuditVerifyResult>;
+
+// ---- Frontend-facing shapes (FRONTEND §5) ---------------------------------------------
+
+export const RouteSummary = z.object({
+  id: z.string(),
+  label: z.string(), // "USDC · Base · Sol VASP · 0.85%"
+  feePct: z.number(),
+  minutes: z.number(),
+});
+export type RouteSummary = z.infer<typeof RouteSummary>;
+
+export const PayoutSummary = z.object({
+  id: z.string(),
+  payeeName: z.string(),
+  country: Country,
+  amountLocal: z.number(),
+  currency: z.string(),
+  amountUsd: z.number(),
+  status: PayoutStatus,
+  warnings: z.number().int(),
+  recommended: RouteSummary.nullable(),
+});
+export type PayoutSummary = z.infer<typeof PayoutSummary>;
+
+export const PayoutDetail = PayoutSummary.extend({
+  invoice: Invoice,
+  plan: Plan.nullable(), // null while status = draft
+  memo: Memo.nullable(),
+  approvals: z.array(z.object({ approver: z.string(), role: z.enum(["first", "second"]), at: z.string() })),
+  payment: z
+    .object({
+      txHash: z.string().nullable(),
+      offrampRef: z.string().nullable(),
+      railRef: z.string(),
+      railMode: RailMode,
+    })
+    .optional(),
+  journal: JournalEntry.optional(),
+});
+export type PayoutDetail = z.infer<typeof PayoutDetail>;
+
+export const PlanAllResponse = z.object({
+  payouts: z.array(PayoutSummary),
+  reroutes: z.array(Reroute),
+});
+export type PlanAllResponse = z.infer<typeof PlanAllResponse>;
+
+export const Settings = z.object({
+  asOf: IsoDate,
+  railMode: RailMode,
+  policy: Policy,
+});
+export type Settings = z.infer<typeof Settings>;
+
+export const Health = z.object({
+  db: z.boolean(),
+  ollama: z.boolean(),
+  model: z.string().nullable(),
+});
+export type Health = z.infer<typeof Health>;
+
+export const ApiError = z.object({
+  error: z.object({ code: z.string(), message: z.string() }),
+});
+export type ApiError = z.infer<typeof ApiError>;

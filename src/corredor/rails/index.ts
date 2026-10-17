@@ -1,30 +1,23 @@
-import type { RailAdapter } from "./adapter";
-import { blindpayRail } from "./blindpay";
-import { bridgeRail } from "./bridge";
-import { mockRail } from "./mock";
+import { RailMode } from "../../contracts";
+import type { FxTable } from "../data";
+import { RailModeError, type RailAdapter } from "./adapter";
+import { createSandboxRail } from "./bridge";
+import { createMockRail } from "./mock";
 
-export class RailModeError extends Error {
-  constructor(mode: string) {
-    super(`Unknown RAIL_MODE "${mode}". Expected mock, bridge, or blindpay.`);
-    this.name = "RailModeError";
-  }
-}
-
-export function railFor(mode: string | undefined = process.env.RAIL_MODE): RailAdapter {
-  const selected = mode?.trim() ? mode.trim() : "mock";
-  switch (selected) {
-    case "mock":
-      return mockRail;
-    case "bridge":
-      return bridgeRail;
-    case "blindpay":
-      return blindpayRail;
-    default:
-      throw new RailModeError(selected);
-  }
-}
-
-export type { Invoice, RailAdapter, RailMode, RailSendInput, RailSendResult, Route } from "./adapter";
-export { bookingRate, mockRail, mockSend } from "./mock";
-export { bridgeRail } from "./bridge";
+export * from "./adapter";
+export { createMockRail, mockRailRef, mockRateMove } from "./mock";
+export { bridgeRail, createSandboxRail } from "./bridge";
 export { blindpayRail } from "./blindpay";
+
+/** RAIL_MODE value → mode. Unset or blank means "mock"; anything unknown throws. */
+export function parseRailMode(raw: string | undefined): RailMode {
+  const selected = raw?.trim() || "mock";
+  const parsed = RailMode.safeParse(selected);
+  if (!parsed.success) throw new RailModeError(selected);
+  return parsed.data;
+}
+
+/** Adapter for a mode (default: RAIL_MODE env, else "mock"). */
+export function getRailAdapter(fx: FxTable, mode: RailMode = parseRailMode(process.env.RAIL_MODE)): RailAdapter {
+  return mode === "mock" ? createMockRail({ fx }) : createSandboxRail(mode);
+}

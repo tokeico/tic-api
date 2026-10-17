@@ -2,6 +2,11 @@
   "name": "tic-api",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
+    "test": "bun test",
+    "check": "bun check src/index.ts src/corredor/index.ts src/db/seed.ts scripts/fixtures.ts scripts/keys.ts scripts/sdn-update.ts",
+    "fixtures": "bun run scripts/fixtures.ts",
+    "keys": "bun run scripts/keys.ts",
+    "sdn:update": "bun run scripts/sdn-update.ts",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d --wait db && bun run db:migrate && bun run db:seed",
@@ -15,7 +20,8 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
-    "hono": "^4.13.13"
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bun": "latest",

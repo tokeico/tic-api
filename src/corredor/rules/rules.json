@@ -1,0 +1,56 @@
+[
+  { "id": "BR-521-FX", "corridor": "BR", "title": "Stablecoin payment = FX operation",
+    "effectiveFrom": "2026-02-02", "effectiveTo": null, "appliesTo": "stablecoin",
+    "check": { "fn": "requireFields", "params": { "fields": ["purposeCode", "payeeTaxId"] } },
+    "outcome": "require_fields",
+    "message": "Brazil treats stablecoin payments as FX: purpose code and counterparty data required.",
+    "source": { "name": "BCB Res. 521 (via fcm.law)", "url": "https://fcm.law/brazil-vasp-license/" } },
+
+  { "id": "BR-521-CAP", "corridor": "BR", "title": "USD 100k cap per operation (standard VASP)",
+    "effectiveFrom": "2026-02-02", "effectiveTo": null, "appliesTo": "stablecoin",
+    "check": { "fn": "amountUsdAbove", "params": { "limit": 100000, "offrampTypes": ["vasp_authorized", "vasp_pending"] } },
+    "outcome": "block", "message": "Above the USD 100k per-operation cap for standard VASPs.",
+    "source": { "name": "Stablecoin Insider / BCB Res. 521", "url": "https://stablecoininsider.org/stablecoin-regulation-in-latin-america/" } },
+
+  { "id": "BR-561-EFX", "corridor": "BR", "title": "eFX providers can't settle in stablecoins",
+    "effectiveFrom": "2026-10-01", "effectiveTo": null, "appliesTo": "stablecoin",
+    "check": { "fn": "offrampTypeIn", "params": { "types": ["efx"] } },
+    "outcome": "block", "message": "Since Oct 1, 2026, eFX providers may not settle overseas payments in stablecoins. Use an authorized VASP or bank.",
+    "source": { "name": "BCB Res. 561 (via Eco)", "url": "https://eco.com/support/en/articles/15575501-brazil-stablecoin-regulation-2026-what-drex-s-pivot-means-for-usdc-and-usdt-inflows" } },
+
+  { "id": "BR-VASP-PENDING-WARN", "corridor": "BR", "title": "Off-ramp authorization still pending",
+    "effectiveFrom": "2026-02-02", "effectiveTo": "2026-10-29", "appliesTo": "stablecoin",
+    "check": { "fn": "offrampTypeIn", "params": { "types": ["vasp_pending"] } },
+    "outcome": "warn", "message": "Off-ramp's BCB authorization is pending; it must be authorized by Oct 30, 2026.",
+    "source": { "name": "fcm.law", "url": "https://fcm.law/brazil-vasp-license/" } },
+
+  { "id": "BR-VASP-AUTH", "corridor": "BR", "title": "VASP authorization transition ends Oct 30",
+    "effectiveFrom": "2026-10-30", "effectiveTo": null, "appliesTo": "stablecoin",
+    "check": { "fn": "offrampTypeIn", "params": { "types": ["vasp_pending"] } },
+    "outcome": "block", "message": "Off-ramp is not BCB-authorized after the transition period.",
+    "source": { "name": "fcm.law", "url": "https://fcm.law/brazil-vasp-license/" } },
+
+  { "id": "MX-BANK-CRYPTO", "corridor": "MX", "title": "Banks may not operate with crypto",
+    "effectiveFrom": "2019-03-08", "effectiveTo": null, "appliesTo": "stablecoin",
+    "check": { "fn": "offrampTypeIn", "params": { "types": ["bank"] } },
+    "outcome": "block", "message": "Mexican banks may not operate with crypto. Use a licensed non-bank off-ramp.",
+    "source": { "name": "iProUP (Banxico/CNBV reminder, 2026)", "url": "https://www.iproup.com/economia-digital/67728-bitcoin-bancos-mexicanos-sigue-prohibido-acceder-legalmente-mayo-2026" } },
+
+  { "id": "AR-PSAV", "corridor": "AR", "title": "Ramps must be registered PSAVs",
+    "effectiveFrom": null, "effectiveTo": null, "appliesTo": "stablecoin",
+    "check": { "fn": "offrampTypeIn", "params": { "types": ["p2p_unregistered"] } },
+    "outcome": "block", "message": "Argentine banks can't touch crypto. Ramps must be CNV-registered PSAVs.",
+    "source": { "name": "Stablecoin Insider", "url": "https://stablecoininsider.org/stablecoin-regulation-in-latin-america/" } },
+
+  { "id": "AR-FX-SPREAD", "corridor": "AR", "title": "Official vs. parallel FX gap",
+    "effectiveFrom": null, "effectiveTo": null, "appliesTo": "any",
+    "check": { "fn": "fxSpreadAbove", "params": { "pct": 5, "pair": "ARS" } },
+    "outcome": "warn", "message": "Official and parallel ARS rates differ by more than 5%. Confirm the rate with the payee.",
+    "source": { "name": "Eco: LatAm stablecoin payroll", "url": "https://eco.com/support/en/articles/15575500-stablecoin-payroll-in-latam-usdc-vs-usdt-for-contractor-payouts" } },
+
+  { "id": "VE-OFAC", "corridor": "VE", "title": "Venezuela sanctions program",
+    "effectiveFrom": null, "effectiveTo": null, "appliesTo": "any",
+    "check": { "fn": "always", "params": {} },
+    "outcome": "block", "message": "Hard stop: Venezuela sanctions. Requires a named OFAC general license and compliance sign-off.",
+    "source": { "name": "OFAC Venezuela sanctions", "url": "https://ofac.treasury.gov/sanctions-programs-and-country-information/venezuela-related-sanctions" } }
+]
