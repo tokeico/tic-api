@@ -62,6 +62,7 @@ function summary(p: PayoutDetail) {
   const warnings = p.plan ? (p.plan.evaluations.find((e) => e.route.id === p.plan!.recommended?.id)?.results ?? []).filter((r) => r.outcome === "warn").map((r) => r.ruleId) : [];
   const onHold = p.securityHold?.status === "active";
   return {
+    id: p.id,
     payout: p.payeeName,
     country: p.country,
     invoice: p.invoice.invoiceNumber,
@@ -119,17 +120,44 @@ const OUTCOME = {
 
 const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
+function oneEditApart(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+    } else {
+      if (++edits > 1) return false;
+      if (a.length >= b.length) i++;
+      if (b.length >= a.length) j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
 /** Find a payout by id, country code, invoice number or (part of) the payee's name. */
-export function resolvePayout(ref: unknown, all: PayoutDetail[]): PayoutDetail | undefined {
+export function resolvePayout(ref: unknown, all: PayoutDetail[], allowNameTypos = false): PayoutDetail | undefined {
   if (typeof ref !== "string" || !ref.trim()) return undefined;
   const r = ref.trim();
-  return (
-    all.find((p) => p.id === r) ??
-    all.find((p) => p.country === r.toUpperCase()) ??
-    all.find((p) => p.invoice.invoiceNumber.toLowerCase() === r.toLowerCase()) ??
-    all.find((p) => fold(p.payeeName).includes(fold(r))) ??
-    all.find((p) => fold(r).includes(fold(p.payeeName.split(" ")[0]!)))
-  );
+  const normalized = fold(r);
+  const matchers: ((p: PayoutDetail) => boolean)[] = [
+    (p) => p.id === r,
+    (p) => p.invoice.invoiceNumber.toLowerCase() === r.toLowerCase(),
+    (p) => p.country === r.toUpperCase(),
+    (p) => fold(p.payeeName) === normalized,
+    (p) => normalized.length >= 3 && fold(p.payeeName).includes(normalized),
+    (p) => normalized.includes(fold(p.payeeName)),
+  ];
+  for (const matches of matchers) {
+    const candidates = all.filter(matches);
+    if (candidates.length) return candidates.length === 1 ? candidates[0] : undefined;
+  }
+  if (!allowNameTypos || normalized.length < 8) return undefined;
+  const candidates = all.filter((p) => oneEditApart(normalized, fold(p.payeeName)));
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 // ---- Tools ------------------------------------------------------------------------------
@@ -187,8 +215,8 @@ interface Ctx {
 export async function runTool(name: string, args: Record<string, unknown>, c: Ctx): Promise<string> {
   const all = await c.payouts();
   const need = () => {
-    const p = resolvePayout(args.payout, all);
-    if (!p) throw new Error(args.payout ? `No payout matches "${String(args.payout)}". Known payees: ${all.map((x) => x.payeeName).join("; ")}.` : `The "payout" field is required: name one payee (${all.map((x) => x.payeeName).join("; ")}). Call propose_action once per payout.`);
+    const p = resolvePayout(args.payout, all, name === "get_payout" || name === "preview_plan");
+    if (!p) throw new Error(args.payout ? `No unique payout matches "${String(args.payout)}". Call list_payouts and retry with an exact payout id or invoice number; if several match, ask the user which invoice.` : `The "payout" field is required: name one payee (${all.map((x) => x.payeeName).join("; ")}). Call propose_action once per payout.`);
     return p;
   };
   switch (name) {
@@ -277,6 +305,7 @@ Rules you must follow:
 - Cite the rule ids that support what you say, exactly as the tools give them. Describe a rule only with its title and message from the tool result; do not guess what a rule means.
 - A rule that "passes" did not block the route; say it was checked, not that the route "complies with" it. A WARNING means the route is allowed but a person must acknowledge it.
 - Copy names, amounts and counts exactly from the tool results (list_payouts gives "count"). Use the status text as given.
+- Use the exact payout id returned by list_payouts or get_payout for subsequent tool calls. If a lookup fails, call list_payouts and retry with the matching id instead of reporting that a supplier does not exist. If several invoices match, ask which invoice; never guess.
 - To prepare something for several payouts, call list_payouts, then call propose_action once per qualifying payout, naming it in the "payout" field. After proposing, say what is now waiting in the queue.
 - Never write out bank account numbers, CLABEs, CVUs, Pix keys or tax ids in full. Use "ending 1234".
 - The rail is simulated and the providers are fictional demo data; say so if it matters.

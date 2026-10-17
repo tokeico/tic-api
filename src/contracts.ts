@@ -172,6 +172,14 @@ export const Screening = z.object({
 });
 export type Screening = z.infer<typeof Screening>;
 
+export const DemoScreening = Screening.extend({
+  simulated: z.literal(true),
+  listVersion: z.string(),
+  matchedEntryId: z.string().optional(),
+  programs: z.array(z.string()).optional(),
+});
+export type DemoScreening = z.infer<typeof DemoScreening>;
+
 /** Output of the rules engine. Deterministic: same inputs + asOf → same JSON. */
 export const Plan = z.object({
   payoutId: z.string(),
