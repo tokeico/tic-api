@@ -4,11 +4,12 @@
 
 import { sql } from "drizzle-orm";
 import { DEFAULT_POLICY, DEMO_INVOICES } from "../corredor";
+import { demoVendorRows } from "./vendors";
 import { currentPrincipal, db, schema } from "../db";
 import { ApiError } from "../http-error";
 import { DEFAULT_AS_OF } from "./settings";
 
-const { invoices, payouts, settings, users } = schema;
+const { invoices, payouts, settings, users, vendors } = schema;
 
 export const DEMO_USERS = [
   { name: "Maria Lopez", email: "maria@corredor.demo", role: "controller" },
@@ -53,7 +54,7 @@ export async function resetDemo(): Promise<{ users: number; payouts: number }> {
     await tx.execute(sql`
       TRUNCATE audit_events, audit_checkpoints, journal_lines, journal_entries, reconciliations,
                payments, approvals, vendor_requests, memos, plans, screenings,
-               sanctions_reviews, security_holds,
+               sanctions_reviews, security_holds, vendors,
                payouts, invoices, ${principal ? sql.raw("") : sql.raw("users,")} settings
       RESTART IDENTITY CASCADE`);
 
@@ -68,6 +69,7 @@ export async function resetDemo(): Promise<{ users: number; payouts: number }> {
       .returning({ id: invoices.id, invoiceNumber: invoices.invoiceNumber });
     const order = new Map(demoInvoices.map((i, n) => [i.invoiceNumber, n]));
     await tx.insert(payouts).values(rows.map((r) => ({ invoiceId: r.id, createdAt: new Date(base + order.get(r.invoiceNumber)!) })));
+    await tx.insert(vendors).values(demoVendorRows());
 
     await tx.insert(settings).values([
       { key: "policy", value: DEFAULT_POLICY },

@@ -6,6 +6,7 @@
 // JSON (test/rules.test.ts proves it).
 
 import type {
+  BankDetailsCheck,
   Invoice,
   Objective,
   Plan,
@@ -21,6 +22,7 @@ import type {
 import type { FxTable } from "../data";
 import { NETWORK_PREFERENCE } from "../quote";
 import { assertIsoDate, fmtUsd } from "../util";
+import { validateInvoice } from "../validate";
 import { runCheck } from "./checks";
 
 /** Screening result as the engine sees it, plus any human review. */
@@ -52,6 +54,8 @@ export interface PlanInput {
   policy: Policy;
   /** Routing preference among compliant routes (default cheapest). */
   objective?: Objective;
+  /** Verified-vendor bank-detail check (C9). Absent = not checked (tests, previews). */
+  bankDetails?: BankDetailsCheck;
 }
 
 // ---- Rule selection -----------------------------------------------------------
@@ -205,13 +209,26 @@ export function plan(input: PlanInput): Plan {
   } else {
     const results = best.results;
     const missing = [...new Set(results.flatMap((r) => (r.outcome === "require_fields" ? (r.missingFields ?? []) : [])))];
-    if (invoice.bankId === null) missing.push("bankId");
+    const bankIssues = validateInvoice(invoice).filter((i) => i.field === "bankId");
+    if (invoice.bankId === null || bankIssues.length > 0) missing.push("bankId");
 
     for (const r of results) {
       if (r.outcome === "require_fields") reasons.push(`${ref(r)} Missing: ${r.missingFields?.join(", ")}.`);
     }
     if (invoice.bankId === null) reasons.push("Payee bank identifier (Pix key / CLABE / CVU / account) is missing.");
+    for (const i of bankIssues) reasons.push(`Bank identifier failed its check: ${i.message}`);
     for (const r of results) if (r.outcome === "warn") reasons.push(ref(r));
+
+    // C9: bank details that don't match the verified vendor record hold the
+    // payout until a person calls the vendor back and re-verifies.
+    const bankHold = input.bankDetails !== undefined && input.bankDetails.status !== "verified";
+    if (bankHold) {
+      reasons.push(
+        input.bankDetails!.status === "changed"
+          ? "Bank details differ from the verified vendor record. Call the vendor back on a number from your records (not the invoice) and record the verification before approving."
+          : "No verified bank details on file for this vendor. Call the vendor back on a number from your records (not the invoice) and record the verification before approving.",
+      );
+    }
 
     const needsSecond = amountUsd > policy.secondApproverAboveUsd;
     if (needsSecond) {
@@ -220,7 +237,15 @@ export function plan(input: PlanInput): Plan {
       );
     }
 
-    status = screeningBlocks ? "blocked" : missing.length > 0 ? "needs_info" : needsSecond ? "awaiting_second_approver" : "ready";
+    status = screeningBlocks
+      ? "blocked"
+      : missing.length > 0
+        ? "needs_info"
+        : bankHold
+          ? "blocked"
+          : needsSecond
+            ? "awaiting_second_approver"
+            : "ready";
   }
 
   return {
@@ -236,6 +261,7 @@ export function plan(input: PlanInput): Plan {
     recommended,
     status: status!,
     reasons,
+    ...(input.bankDetails !== undefined ? { bankDetails: input.bankDetails } : {}),
   };
 }
 

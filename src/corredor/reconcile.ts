@@ -165,15 +165,16 @@ const csvCell = (v: string | number | null): string => {
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
 
-/** QuickBooks Online journal-entry import format (one row per line). */
-export function journalToCsv(entries: (JournalEntry & { id?: string })[]): string {
+/** QuickBooks Online journal-entry import format (one row per line). Name is the payee when the caller has it. */
+export function journalToCsv(entries: (JournalEntry & { id?: string; name?: string })[]): string {
   const header = ["JournalNo", "JournalDate", "AccountName", "Debits", "Credits", "Description", "Name", "Currency"];
   const rows = [header.join(",")];
   entries.forEach((e, i) => {
     const no = e.id ?? `CORR-${String(i + 1).padStart(4, "0")}`;
+    const name = e.name ?? e.payoutId;
     for (const l of e.lines) {
       rows.push(
-        [no, e.entryDate, l.account, l.debit ? l.debit.toFixed(2) : "", l.credit ? l.credit.toFixed(2) : "", l.description ?? e.description, e.payoutId, e.currency]
+        [no, e.entryDate, l.account, l.debit ? l.debit.toFixed(2) : "", l.credit ? l.credit.toFixed(2) : "", l.description ?? e.description, name, e.currency]
           .map(csvCell)
           .join(","),
       );

@@ -2,6 +2,7 @@
   "name": "tic-api",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
+    "tunnel:api": "ngrok http http://localhost:3000 --url https://geotropic-preseminal-syble.ngrok-free.dev --inspect=false",
     "test": "bun run scripts/test-db.ts",
     "test:auth": "bun run scripts/test-db.ts auth",
     "test:workflow": "bun run scripts/test-db.ts workflow",

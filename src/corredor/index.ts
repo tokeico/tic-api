@@ -7,7 +7,7 @@
 // extracts invoices and explains plans; it never decides. Route handlers
 // should import from "./corredor" rather than reaching into submodules.
 
-import type { Invoice, Objective, OfframpType, Plan, Policy, Reroute } from "../contracts";
+import type { BankDetailsCheck, Invoice, Objective, OfframpType, Plan, Policy, Reroute } from "../contracts";
 import { loadReferenceData, type ReferenceData } from "./data";
 import { DEFAULT_POLICY } from "./policy";
 import { quote } from "./quote";
@@ -74,10 +74,12 @@ export interface PlanPayoutInput {
   sanctions?: SanctionsInput | null;
   policy?: Policy;
   options?: PlanOptions;
+  /** Verified-vendor bank-detail check (C9): a mismatch or missing record holds the payout. */
+  bankDetails?: BankDetailsCheck;
 }
 
 /** quote + rules engine with the loaded reference data. Synchronous and pure. */
-export function planPayout({ payoutId, invoice, asOf, screening, sanctions = null, policy = DEFAULT_POLICY, options = {} }: PlanPayoutInput): Plan {
+export function planPayout({ payoutId, invoice, asOf, screening, sanctions = null, policy = DEFAULT_POLICY, options = {}, bankDetails }: PlanPayoutInput): Plan {
   const r = reference();
   const off = new Set(options.disabledOfframps ?? []);
   const offramps = r.offramps
@@ -91,6 +93,7 @@ export function planPayout({ payoutId, invoice, asOf, screening, sanctions = nul
     sanctions,
     policy,
     objective: options.objective,
+    bankDetails,
     routes: quote(invoice, { offramps, fx: r.fx }),
     rules: r.rules,
     rulesVersion: r.rulesVersion,

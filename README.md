@@ -31,6 +31,12 @@ The API runs on http://localhost:3000. In another terminal, follow the [web setu
 
 For deployment, set `WEB_ORIGIN` to the exact HTTPS web origin and keep audit keys stable in the platform’s secret store. HTTPS/production sessions use Secure, HTTP-only, SameSite=Lax cookies. Configure the web server’s `API_ORIGIN` to reach this API; its same-origin proxy forwards `/api/*` and `/mcp`.
 
+### Laptop API tunnel
+
+Run `bun run dev` and `bun run tunnel:api` in separate terminals. The tunnel uses `https://geotropic-preseminal-syble.ngrok-free.dev` and forwards only to the Corredor API on port 3000. Keep `OLLAMA_URL=http://localhost:11434`: the model stays private on this machine. The web Docker image defaults to this API tunnel.
+
+Set `WEB_ORIGIN` to the exact dashboard origin (currently `http://localhost:8080`) and restart the API when it changes. Authentication, workspace isolation and origin validation still apply over the tunnel. Keep this machine and the API, Ollama and ngrok processes running; no Docker image can keep a laptop endpoint available while the laptop is offline.
+
 Before presenting, check http://localhost:3000/api/health. Expect `"db": true`. If the first demo action reports `AUDIT_HMAC_KEY is not set`, complete the key-generation step above and restart the API.
 
 ## Optional: live agent and invoice extraction

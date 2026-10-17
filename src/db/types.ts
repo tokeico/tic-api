@@ -104,6 +104,11 @@ export const AUDIT_EVENT_TYPES = [
   "sanctions_reviewed",
   "security_flagged",
   "security_reviewed",
+  // Added with the vendor call-back hold and two-person policy rule.
+  "bank_verified",
+  "approval_voided",
+  "settings_change_requested",
+  "settings_change_cancelled",
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 

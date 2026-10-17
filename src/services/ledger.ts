@@ -46,5 +46,7 @@ export async function listLedger(q: DbOrTx = db): Promise<LedgerEntry[]> {
 
 /** QuickBooks journal import CSV. Entry ids are dropped so JournalNo reads CORR-0001, CORR-0002… */
 export async function ledgerCsv(q: DbOrTx = db): Promise<string> {
-  return journalToCsv((await listLedger(q)).map(({ id: _id, payeeName: _p, invoiceNumber: _n, routeLabel: _r, match: _m, ...entry }) => entry));
+  return journalToCsv(
+    (await listLedger(q)).map(({ id: _id, payeeName, invoiceNumber: _n, routeLabel: _r, match: _m, ...entry }) => ({ ...entry, name: payeeName })),
+  );
 }

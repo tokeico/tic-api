@@ -1,10 +1,11 @@
 import { sql } from "drizzle-orm";
 import type { adminDb } from "../db";
 import { DEFAULT_POLICY, DEMO_INVOICES } from "../corredor";
-import { invoices, payouts, settings, users } from "../db/schema";
+import { invoices, payouts, settings, users, vendors } from "../db/schema";
+import { demoVendorRows } from "../services/vendors";
 
 type Transaction = Parameters<Parameters<typeof adminDb.transaction>[0]>[0];
-const tables = ["users", "invoices", "extraction_cache", "payouts", "screenings", "sanctions_reviews", "security_holds", "plans", "memos", "vendor_requests", "approvals", "payments", "reconciliations", "journal_entries", "journal_lines", "audit_events", "audit_checkpoints", "settings"];
+const tables = ["users", "vendors", "invoices", "extraction_cache", "payouts", "screenings", "sanctions_reviews", "security_holds", "plans", "memos", "vendor_requests", "approvals", "payments", "reconciliations", "journal_entries", "journal_lines", "audit_events", "audit_checkpoints", "settings"];
 const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
 
 export async function provisionWorkspace(tx: Transaction, schemaName: string) {
@@ -42,6 +43,7 @@ export async function seedWorkspace(tx: Transaction, schemaName: string, owner: 
     source: "seed" as const, extractionSource: "seed" as const, createdAt: new Date(base + i),
   }))).returning({ id: invoices.id, createdAt: invoices.createdAt });
   await tx.insert(payouts).values(rows.map((row) => ({ invoiceId: row.id, createdAt: row.createdAt })));
+  await tx.insert(vendors).values(demoVendorRows());
   await tx.insert(settings).values([
     { key: "policy", value: DEFAULT_POLICY },
     { key: "demo_as_of", value: process.env.DEMO_DEFAULT_AS_OF ?? "2026-10-17" },

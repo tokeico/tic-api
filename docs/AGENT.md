@@ -1,6 +1,6 @@
 # The local LLM: agent, invoice extraction and memos
 
-The local model in Ollama does three jobs: answers the Agent tab's chat, reads uploaded invoice PDFs, and writes payout memos. Nothing leaves the machine (DECISIONS D12). If the model is unreachable, the web app falls back to scripted replies over the same live data, so the demo never breaks.
+The local model in Ollama does three jobs: answers the Agent tab's chat, reads uploaded invoice PDFs, and writes payout memos. Model inference runs on the API machine. For the hosted demo, the web server reaches Corredor through an HTTPS ngrok tunnel; those API requests cross the network, so this deployment is not entirely network-local. Ollama stays private at `http://localhost:11434`. If the model is unreachable, the web app falls back to scripted replies over the same live data, so the demo never breaks.
 
 **Principle:** AI reads and explains, code decides, a person approves. The model can look things up and *propose* actions. It cannot approve, pay, reconcile or change a rule, because no tool for that exists.
 
