@@ -178,7 +178,7 @@ export const Reroute = z.object({
   from: z.string().nullable(), // route id
   to: z.string().nullable(), // route id
   ruleId: z.string().nullable(), // rule that caused the change, if one did
-  reason: z.string(), // e.g. "BR-561-EFX took effect: eFX providers can't settle in stablecoins"
+  reason: z.string(), // e.g. "BR-561-EFX took effect: eFX providers can't settle with foreign counterparties in virtual assets"
 });
 export type Reroute = z.infer<typeof Reroute>;
 

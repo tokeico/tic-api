@@ -123,8 +123,10 @@ export const Invoice = z.object({
 export type Invoice = z.infer<typeof Invoice>;
 
 export type OfframpType =
-  | "vasp_authorized" | "vasp_pending" | "efx" | "bank"
+  | "vasp_authorized" | "vasp_pending" | "vasp_unfiled" | "efx" | "bank"
   | "nonbank_licensed" | "psav_registered" | "p2p_unregistered";
+// vasp_unfiled: operating in Brazil but hasn't filed for BCB authorization (deadline 2026-10-30)
+// nonbank_licensed: legacy id; in MX it means a SAT-registered platform (Mexico has no crypto license)
 
 export interface Offramp {
   id: string; name: string; country: z.infer<typeof Country>; type: OfframpType;
@@ -168,70 +170,29 @@ export type Memo = z.infer<typeof Memo>;
 
 ## 6. Rules pack (`corredor/rules/rules.json`)
 
-Each rule = **when** (corridor + effective window) + **check** (named function plus params) + **outcome** + **source**.
+Each rule = **when** (corridor + effective window) + **check** (named function plus params) + **outcome** + **source**. The full JSON, with each rule's message and source, is in [`src/corredor/rules/rules.json`](../src/corredor/rules/rules.json). The legal sourcing, verdicts and contested points for every rule are in **[RULES-SOURCES.md](./RULES-SOURCES.md)**.
 
-```json
-[
-  { "id": "BR-521-FX", "corridor": "BR", "title": "Stablecoin payment = FX operation",
-    "effectiveFrom": "2026-02-02", "effectiveTo": null, "appliesTo": "stablecoin",
-    "check": { "fn": "requireFields", "params": { "fields": ["purposeCode", "payeeTaxId"] } },
-    "outcome": "require_fields",
-    "message": "Brazil treats international payments with stablecoins as FX operations (Res. BCB 521, amending Res. 277): purpose code and counterparty data are required.",
-    "source": { "name": "BCB Res. 521/2025", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=521" } },
+11 rules, verified against primary sources on 2026-10-17 (researcher plus an independent adversarial check). Dates are inclusive; `→` means open-ended.
 
-  { "id": "BR-521-CAP", "corridor": "BR", "title": "USD 100k cap per operation (standard VASP)",
-    "effectiveFrom": "2026-02-02", "effectiveTo": null, "appliesTo": "stablecoin",
-    "check": { "fn": "amountUsdAbove", "params": { "limit": 100000, "offrampTypes": ["vasp_authorized", "vasp_pending"] } },
-    "outcome": "block", "message": "Res. BCB 521 caps an international payment with virtual assets at USD 100k per transaction for VASPs (SPSAVs) when the counterparty isn't authorized in the FX market.",
-    "source": { "name": "BCB Res. 521/2025 (Res. 277, art. 29)", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=521" } },
+| ID | Corridor | Effective | Check | Outcome | Source (primary) |
+|---|---|---|---|---|---|
+| BR-521-FX | BR | 2026-05-04 → | `requireFields(["purposeCode","payeeTaxId"])` | `require_fields` | Res. BCB 521 (Res. 277 arts. 76-A to 76-C; art. 6) |
+| BR-521-CAP | BR | 2026-02-02 → | `amountUsdAbove(100000, ["vasp_authorized","vasp_pending","vasp_unfiled"])` | `block` | Res. BCB 521 (Res. 277 art. 29, IV) |
+| BR-561-EFX | BR | 2026-10-01 → | `offrampTypeIn(["efx"])` | `block` | Res. BCB 561 (Res. 277 art. 50, I) |
+| BR-VASP-PENDING-WARN | BR | 2026-02-02 → | `offrampTypeIn(["vasp_pending"])` | `warn` | Res. BCB 520 art. 88 I, §6; IN 704 art. 9; Res. 548 |
+| BR-VASP-UNFILED-WARN | BR | 2026-02-02 → 2026-10-30 | `offrampTypeIn(["vasp_unfiled"])` | `warn` | Res. BCB 520 art. 88 I, §7; IN 704 art. 9 |
+| BR-VASP-AUTH | BR | 2026-10-31 → | `offrampTypeIn(["vasp_unfiled"])` | `block` (Corredor policy) | Res. BCB 520 art. 88 §7; art. 91 per Res. 589 |
+| BR-VASP-ART91 | BR | 2026-11-06 → | `offrampTypeIn(["vasp_pending"])` | `warn` | Res. BCB 589 (new art. 91 of Res. 520) |
+| MX-BANK-CRYPTO | MX | 2019-03-09 → | `offrampTypeIn(["bank"])` | `block` | Banxico Circular 4/2019, rule 3.a (DOF 08-03-2019) |
+| AR-PSAV | AR | 2024-03-25 → | `offrampTypeIn(["p2p_unregistered"])` | `block` | CNV RG 1172/2026 (Normas Tít. XIV Cap. III arts. 1, 3, 4) |
+| AR-FX-SPREAD | AR | always | `fxSpreadAbove(5, "ARS")` | `warn` (business risk) | BCRA Com. A 3500 wholesale (API) vs. USDT/ARS snapshot |
+| VE-OFAC | VE | always | `always()` | `block` (policy hold) | OFAC: 31 CFR 591; EO 13884; FAQ 680 |
 
-  { "id": "BR-561-EFX", "corridor": "BR", "title": "eFX providers can't settle in stablecoins",
-    "effectiveFrom": "2026-10-01", "effectiveTo": null, "appliesTo": "stablecoin",
-    "check": { "fn": "offrampTypeIn", "params": { "types": ["efx"] } },
-    "outcome": "block", "message": "Since Oct 1, 2026, eFX providers may not use virtual assets to settle with their foreign counterparties (Res. BCB 561, art. 50). Use an authorized VASP or a bank.",
-    "source": { "name": "BCB Res. 561/2026", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=561" } },
+`appliesTo` is `stablecoin` for every rule except AR-FX-SPREAD and VE-OFAC, which are `any` (they also apply to the wire).
 
-  { "id": "BR-VASP-PENDING-WARN", "corridor": "BR", "title": "Off-ramp authorization still pending",
-    "effectiveFrom": "2026-02-02", "effectiveTo": "2026-10-29", "appliesTo": "stablecoin",
-    "check": { "fn": "offrampTypeIn", "params": { "types": ["vasp_pending"] } },
-    "outcome": "warn", "message": "Off-ramp's BCB authorization is pending. Incumbent VASPs had to file by Oct 30, 2026 (Res. BCB 520, art. 88); from Nov 6, 2026 Brazilian banks and payment institutions may not deal with unauthorized VASPs (Res. BCB 589).",
-    "source": { "name": "BCB Res. 520/2025, art. 88", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=520" } },
+Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI. Verified is not the same as legally reviewed: the pack still needs a human compliance review before production.
 
-  { "id": "BR-VASP-AUTH", "corridor": "BR", "title": "Unauthorized VASPs excluded (pack policy)",
-    "effectiveFrom": "2026-10-30", "effectiveTo": null, "appliesTo": "stablecoin",
-    "check": { "fn": "offrampTypeIn", "params": { "types": ["vasp_pending"] } },
-    "outcome": "block", "message": "Off-ramp is not BCB-authorized. Oct 30, 2026 is the filing deadline for incumbent VASPs (Res. BCB 520, art. 88); this pack stops routing to unauthorized VASPs from that date, ahead of the Nov 6 bank cut-off (Res. BCB 589).",
-    "source": { "name": "BCB Res. 520/2025, art. 88", "url": "https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=520" } },
-
-  { "id": "MX-BANK-CRYPTO", "corridor": "MX", "title": "Banks may not operate with crypto",
-    "effectiveFrom": "2019-03-09", "effectiveTo": null, "appliesTo": "stablecoin",
-    "check": { "fn": "offrampTypeIn", "params": { "types": ["bank"] } },
-    "outcome": "block", "message": "Mexican banks may not offer clients crypto exchange, transmission or custody (Banxico Circular 4/2019, in force Mar 9, 2019; reaffirmed by the CNBV in May 2026). Use a licensed non-bank off-ramp.",
-    "source": { "name": "Banxico Circular 4/2019", "url": "https://www.banxico.org.mx/regulations-and-supervision/normative-issued-by-banco-de-mexico/circular-4-2019/%7B7C7FB718-13FA-2017-D6A3-C81DE3679CED%7D.pdf" } },
-
-  { "id": "AR-PSAV", "corridor": "AR", "title": "Ramps must be registered PSAVs",
-    "effectiveFrom": "2024-03-25", "effectiveTo": null, "appliesTo": "stablecoin",
-    "check": { "fn": "offrampTypeIn", "params": { "types": ["p2p_unregistered"] } },
-    "outcome": "block", "message": "Virtual-asset service providers must be registered with the CNV (RG 994/2024, in force Mar 25, 2024). Argentine banks still can't offer crypto (BCRA Com. A 7506). Use a registered PSAV.",
-    "source": { "name": "CNV RG 994/2024 (Boletín Oficial)", "url": "https://www.boletinoficial.gob.ar/detalleAviso/primera/305110/20240325" } },
-
-  { "id": "AR-FX-SPREAD", "corridor": "AR", "title": "Official vs. parallel FX gap",
-    "effectiveFrom": null, "effectiveTo": null, "appliesTo": "any",
-    "check": { "fn": "fxSpreadAbove", "params": { "pct": 5, "pair": "ARS" } },
-    "outcome": "warn", "message": "Official and parallel ARS rates differ by more than 5%. Confirm the rate with the payee.",
-    "source": { "name": "Eco: LatAm stablecoin payroll", "url": "https://eco.com/support/en/articles/15575500-stablecoin-payroll-in-latam-usdc-vs-usdt-for-contractor-payouts" } },
-
-  { "id": "VE-OFAC", "corridor": "VE", "title": "Venezuela sanctions program",
-    "effectiveFrom": null, "effectiveTo": null, "appliesTo": "any",
-    "check": { "fn": "always", "params": {} },
-    "outcome": "block", "message": "Hard stop: Venezuela sanctions. Requires a named OFAC general license and compliance sign-off.",
-    "source": { "name": "OFAC Venezuela sanctions", "url": "https://ofac.treasury.gov/sanctions-programs-and-country-information/venezuela-related-sanctions" } }
-]
-```
-
-**Verified Oct 17, 2026 against primary texts** (BCB Res. 520, 521, 561 and 589; Banxico Circular 4/2019; CNV RG 994/2024; OFAC). Corrections made: MX effective Mar 9, 2019 (the day after the Mar 8 publication); AR-PSAV effective Mar 25, 2024; BR messages and sources now cite the BCB resolutions. **One deliberate simplification remains:** Oct 30, 2026 is the *filing* deadline for incumbent VASPs (Res. 520, art. 88), not the end of their right to operate. Filers may continue until the BCB decides, and the bank cut-off is Nov 6, 2026 (Res. 589). BR-VASP-AUTH keeps the Oct 30 date so the demo reroutes, and its message says so. Moving it to 2026-11-06 is the legally closer choice (see DECISIONS D5). Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI.
-
-**Check functions** (`checks.ts`): `always`, `offrampTypeIn(types)`, `amountUsdAbove(limit, offrampTypes?)`, `requireFields(fields)`, `fxSpreadAbove(pct, pair)`. Each is pure: `(ctx: { invoice, route, fx }) => boolean | { missing: string[] }`.
+**Check functions** (`checks.ts`): `always`, `offrampTypeIn(types)`, `amountUsdAbove(limit, offrampTypes?)`, `requireFields(fields)`, `fxSpreadAbove(pct, pair)`. Each is pure: `(ctx: { invoice, route, fx }, params) => { hit: boolean; missing?: string[]; detail?: string }`. Params are validated with zod when the pack loads, so a bad rule fails at startup.
 
 ## 7. Demo data
 
@@ -240,7 +201,7 @@ Each rule = **when** (corridor + effective window) + **check** (named function p
 | id | name | country | type | fee | asset/network | rail |
 |---|---|---|---|---|---|---|
 | br-pagafx | PagaFX | BR | `efx` | 0.55% | USDC/base | pix |
-| br-ponte | Ponte Digital | BR | `vasp_pending` | 0.70% | USDC/base | pix |
+| br-ponte | Ponte Digital | BR | `vasp_unfiled` | 0.70% | USDC/base | pix |
 | br-sol | Sol VASP | BR | `vasp_authorized` | 0.85% | USDC/base, arbitrum | pix |
 | mx-puente | Puente MX | MX | `nonbank_licensed` | 0.60% | USDC/base | spei |
 | mx-bancoazul | Banco Azul | MX | `bank` | 0.40% | USDC/base | spei |
@@ -248,11 +209,13 @@ Each rule = **when** (corridor + effective window) + **check** (named function p
 | ar-cueva | Cueva P2P | AR | `p2p_unregistered` | 0.50% | USDT/tron | cvu |
 
 The design means the cheapest option is always non-compliant somewhere:
-- **BR:** before Oct 1, PagaFX wins. Oct 1–29, Ponte wins with a warning. From Oct 30, only Sol passes. That gives **three distinct routes** on the slider.
-- **MX:** Banco Azul is always blocked, so Puente is chosen.
+- **BR:** before Oct 1, PagaFX (`efx`) wins. Oct 1–30, PagaFX is blocked by BR-561-EFX and Ponte wins with a BR-VASP-UNFILED-WARN warning: it's operating but hasn't filed for BCB authorization, and the filing deadline is Oct 30. From Oct 31, Ponte is blocked by BR-VASP-AUTH (missed the deadline) and only Sol passes. That gives **three distinct routes** on the slider. Oct 30 is deliberately *not* a reroute date, because it's still a valid filing day ([RULES-SOURCES.md](./RULES-SOURCES.md) §6). Sol being "authorized" is hypothetical: no SPSAV had been authorized as of mid-October 2026.
+- **MX:** Banco Azul is always blocked, so Puente is chosen. Puente's type id is `nonbank_licensed`, but describe it as a **SAT-registered** virtual-asset platform: Mexico has no crypto license.
 - **AR:** Cueva is blocked, so Pampa is chosen.
 
-**`data/fx.json`** (demo rates, labeled): `{ "BRL": 5.40, "MXN": 18.50, "ARS_official": 1350, "ARS_parallel": 1460 }`. The wire route is always `{ feePct: 4.5, minutes: 2880 }`.
+No demo provider is `vasp_pending`, so BR-VASP-PENDING-WARN and BR-VASP-ART91 never fire on the slider. They cover real-world providers that filed on time.
+
+**`data/fx.json`** (demo rates, labeled): `{ "BRL": 5.40, "MXN": 18.50, "ARS_official": 1518, "ARS_parallel": 1619 }`. The ARS pair is a snapshot from 2026-10-16: `ARS_official` is the BCRA Com. A 3500 wholesale rate and `ARS_parallel` is the USDT/ARS (crypto) rate. That's a 6.7% gap, so AR-FX-SPREAD fires at its 5% threshold. The wire route is always `{ feePct: 4.5, minutes: 2880 }`.
 
 ## 8. Local LLM (Ollama + Llama)
 
@@ -395,11 +358,13 @@ export interface RailAdapter {
 
 ## 14. Testing (`bun test`)
 
-- `test/rules.test.ts`: golden tests for the four demo invoices at `2026-09-30`, `2026-10-01`, `2026-10-17` and `2026-10-30`:
-  - BR goes PagaFX → Ponte → Ponte → Sol
+- `test/rules.test.ts`: golden tests for the four demo invoices at `2026-09-30`, `2026-10-01`, `2026-10-17` and `2026-10-31` (`DEMO_DATES` in `src/corredor/demo.ts`):
+  - BR goes PagaFX → Ponte → Ponte → Sol; Ponte carries the BR-VASP-UNFILED-WARN warning on Oct 1 and Oct 17
+  - Oct 30 changes nothing for BR (still a valid filing day); Oct 17 → Oct 31 reroutes to Sol and names BR-VASP-AUTH
   - MX is always Puente, `awaiting_second_approver`
-  - AR is Pampa with an `AR-FX-SPREAD` warning
+  - AR is Pampa with an `AR-FX-SPREAD` warning (1,518 vs. 1,619, 6.7%)
   - VE is `blocked`
+  - The pack has exactly the 11 rules, each with an `https://` source; BR-VASP-ART91 is active from 2026-11-06
   - **Determinism:** run `plan()` 100 times and get byte-identical JSON.
 - `test/audit.test.ts`: the chain verifies; editing one payload breaks it at that sequence number; a forged checkpoint signature fails.
 - `test/extract.test.ts` (optional, needs Ollama): the four demo PDFs extract to the expected fields.
@@ -431,15 +396,19 @@ BitQate runs Docker images or Git repos (rebuilt on each push), managed PostgreS
 - `ollama pull llama3.1:8b`, then `ollama run llama3.1:8b "hi"` to warm it up.
 - `bun run db:reset && bun run scripts/seed.ts`, then pre-warm extraction for the four PDFs.
 - `GET /api/health` should report DB ok, Ollama ok and model loaded.
-- Leave the slider on **2026-10-17**. Rehearsed moves: **Sep 30 → Oct 1 → Oct 30 → today**.
+- Leave the slider on **2026-10-17**. Rehearsed moves: **Sep 30 → Oct 1 → Oct 31 → today**.
+- Re-check the OFAC Venezuela program page for new general licenses right before going on stage.
 - **If the LLM is down:** cached extraction and the template memo still give every decision.
 - **If the network is down:** the backup video plays from the laptop.
 
 ## Sources
 
-- Brazil VASP / FX rules: https://fcm.law/brazil-vasp-license/ · https://eco.com/support/en/articles/15575501-brazil-stablecoin-regulation-2026-what-drex-s-pivot-means-for-usdc-and-usdt-inflows
-- LatAm regulation overview: https://stablecoininsider.org/stablecoin-regulation-in-latin-america/
-- Mexico banks and crypto: https://www.iproup.com/economia-digital/67728-bitcoin-bancos-mexicanos-sigue-prohibido-acceder-legalmente-mayo-2026
+- **Rules (all 11):** primary sources, verdicts and contested points are in [RULES-SOURCES.md](./RULES-SOURCES.md). Main texts:
+  - Brazil: Res. BCB 521 https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=521 · Res. BCB 561 https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=561 · Res. BCB 520 https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=520 · Res. BCB 589 https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Resolu%C3%A7%C3%A3o%20BCB&numero=589 · IN BCB 704 https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?tipo=Instru%C3%A7%C3%A3o%20Normativa%20BCB&numero=704
+  - Mexico: Banxico Circular 4/2019 (DOF) https://dof.gob.mx/nota_detalle.php?codigo=5552303&fecha=08/03/2019
+  - Argentina: CNV RG 1172/2026 (Boletín Oficial) https://www.boletinoficial.gob.ar/detalleAviso/primera/348986/20261015 · BCRA A 3500 rate API https://api.bcra.gob.ar/estadisticascambiarias/v1.0/Cotizaciones/USD
+  - Venezuela: OFAC program page https://ofac.treasury.gov/sanctions-programs-and-country-information/venezuela-related-sanctions · OFAC FAQ 680 https://ofac.treasury.gov/faqs/680
+- The secondary sources the v1 pack cited (fcm.law, Eco, Stablecoin Insider, iProUP) were replaced. Several were stale or didn't support the claim; see RULES-SOURCES.md.
 - Costs and pain: https://stabled.co/resources/latam-report · https://eco.com/support/en/articles/14466065-stablecoin-settlement-reconciliation-in-2026-why-the-accounting-layer-is-the-real-bottleneck
 - Rails: https://docs.stripe.com/stablecoins/ecosystem/bridge · https://blindpay.com/resources/more/best-stablecoin-apis-cross-border-payments-2026
 - BitQate: https://www.producthunt.com/products/bitqate

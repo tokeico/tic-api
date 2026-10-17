@@ -16,8 +16,8 @@ US and Miami companies that pay suppliers and contractors in Latin America lose 
 
 | Pain | Who feels it | Today |
 |---|---|---|
-| Every country has different rules, and they change (Brazil changed Oct 1, 2026; its crypto-provider licensing deadline is Oct 30) | Compliance, controller | Someone reads law-firm memos and hopes nothing changed |
-| Picking the coin, network and licensed local provider | AP / treasury | Manual, done per payment, tribal knowledge |
+| Every country has different rules, and they change (Brazil changed Oct 1, 2026; crypto providers already operating must file for authorization by Oct 30) | Compliance, controller | Someone reads law-firm memos and hopes nothing changed |
+| Picking the coin, network and compliant local provider | AP / treasury | Manual, done per payment, tribal knowledge |
 | Sanctions exposure (Venezuela, lookalike names) | Compliance | Manual list checks, or none |
 | Matching blockchain transactions to invoices and the ERP | Controller | Hashes copied from block explorers into spreadsheets at month-end |
 
@@ -89,21 +89,23 @@ Priority: **P0** must ship for the demo · **P1** strongly wanted · **P2** stre
 - **P0** Rules are data (`rules.json`). Each rule has an id, corridor, effective-from and effective-to dates, a source name and URL, a condition, an outcome (`block`, `warn` or `require_fields`) and a message.
 - **P0** Takes an **as-of date** and evaluates every candidate route. The recommended route is the **cheapest compliant one**.
 - **P0** Deterministic: the same inputs and as-of date always give the same result. Covered by unit tests.
-- **P0** Rules v1:
+- **P0** Rules pack (11 rules, verified against primary sources on Oct 17, 2026; full sourcing in [RULES-SOURCES.md](./RULES-SOURCES.md)):
 
 | ID | Corridor | Effective | Rule | Outcome |
 |---|---|---|---|---|
-| BR-521-FX | BR | 2026-02-02 | Stablecoin payments are foreign-exchange operations | `require_fields`: purpose code, payer and payee data |
-| BR-521-CAP | BR | 2026-02-02 | Per-operation cap of USD 100k for standard VASPs | `block` the route above the cap |
-| BR-561-EFX | BR | 2026-10-01 | eFX providers may not settle overseas payments in stablecoins | `block` routes whose off-ramp is an eFX provider |
-| BR-VASP-PENDING-WARN | BR | 2026-02-02 → 2026-10-29 | Off-ramp authorization still pending | `warn` |
-| BR-VASP-AUTH | BR | 2026-10-30 | VASP authorization transition ends | `block` routes whose off-ramp isn't authorized |
-| MX-BANK-CRYPTO | MX | 2019-03-09 (Banxico Circular 4/2019, reaffirmed by the CNBV May 2026) | Banks may not offer clients crypto exchange, transmission or custody | `block` routes that off-ramp through a bank. A licensed non-bank is required. |
-| AR-PSAV | AR | 2024-03-25 (CNV RG 994/2024) | Ramps must be registered PSAVs | `block` unregistered off-ramps (P2P desks) |
-| AR-FX-SPREAD | AR | — | Official vs. parallel exchange-rate gap | `warn` if the spread is over 5%, showing both rates |
-| VE-OFAC | VE | — | Venezuela sanctions program | `block` every route unless a named general license is recorded and a human signs off |
+| BR-521-FX | BR | 2026-05-04 (Res. 521 art. 76-C; FX classification since 2026-02-02) | Stablecoin payments are FX operations; the VASP must collect a BCB purpose code and client ID | `require_fields`: purpose code, payee tax ID |
+| BR-521-CAP | BR | 2026-02-02 | Non-bank VASP (SPSAV) cap of US$100k per international payment (Res. 277 art. 29 IV) | `block` the route above the cap |
+| BR-561-EFX | BR | 2026-10-01 | eFX providers may not settle with their counterparty abroad in virtual assets (Res. 277 art. 50 I, per Res. 561) | `block` routes whose off-ramp is an eFX provider |
+| BR-VASP-PENDING-WARN | BR | 2026-02-02 → (open-ended) | Off-ramp filed for BCB authorization on time and is waiting; it may keep operating (Res. 520 art. 88 §6) | `warn` |
+| BR-VASP-UNFILED-WARN | BR | 2026-02-02 → 2026-10-30 | Off-ramp is operating but hasn't filed yet; the filing deadline is Oct 30 (Res. 520 art. 88 I; IN 704 art. 9) | `warn` |
+| BR-VASP-AUTH | BR | 2026-10-31 | Off-ramp missed the Oct 30 filing deadline and must wind down (art. 88 §7). Blocking from Oct 31 is Corredor policy. | `block` |
+| BR-VASP-ART91 | BR | 2026-11-06 | Brazilian banks may not deal with non-authorized VASPs (art. 91 per Res. 589); unclear whether pending filers are covered | `warn` on pending off-ramps |
+| MX-BANK-CRYPTO | MX | 2019-03-09 (Banxico Circular 4/2019) | Banks and fintechs (ITFs) may not give clients crypto exchange, transfer or custody | `block` routes that off-ramp through a bank. Use a SAT-registered non-bank platform (LFPIORPI art. 17-XVI). |
+| AR-PSAV | AR | 2024-03-25 (CNV RG 994; chapter replaced by RG 1172/2026 from 2026-10-16) | Off-ramps must be in the CNV PSAV registry | `block` unregistered off-ramps (policy also covers small P2P sellers who are lawfully exempt) |
+| AR-FX-SPREAD | AR | — | Business risk, not a legal rule: USDT/ARS vs. BCRA wholesale rate | `warn` if the gap is over 5%, showing both rates |
+| VE-OFAC | VE | — | Company policy hold pending sanctions review (targeted OFAC sanctions, not a country-wide ban) | `block` every route until compliance confirms no blocked person, owner or bank is involved |
 
-> Rule dates and sources were checked against the primary texts on Oct 17 (see DECISIONS D5). Have compliance review the BR-VASP rows before the pitch: Oct 30 is the VASP *filing* deadline and the bank cut-off is Nov 6. Sources are listed in ARCHITECTURE.md §6.
+> Verified on Oct 17 by a researcher plus an independent adversarial check against the regulators' own texts. Still labeled "pending compliance review" and not legal advice. Contested points (the Res. 589 art. 91 reading, "per payment" for the cap, the RG 994 45-day count) are listed in RULES-SOURCES.md.
 
 ### 8.5 Memo
 - **P0** For each payout, the local Llama model writes a short memo covering what's being paid, the chosen route, why it complies (each rule cited with its source link), the warnings, and what a human should check. The model explains the engine's result and never overrides it. If the model is down, a template memo built from the rule messages is used.
@@ -143,15 +145,16 @@ Seed data: four invoices, all names fictional.
 
 | # | Payee | Amount | Expected (as of Oct 17) |
 |---|---|---|---|
-| 1 | Estúdio Paulista Design Ltda (São Paulo) | R$85,000 | **Ready, with warning.** USDC on Base → VASP whose authorization is pending → Pix, purpose code filled. Sep 30: the cheaper eFX route. Oct 30: switches to the authorized VASP. |
-| 2 | Autopartes del Norte S.A. de C.V. (Monterrey) | MX$1,200,000 | **Awaiting 2nd approver** (over $50k). USDC → licensed non-bank → SPEI. |
-| 3 | Lucía Fernández, contractor (Buenos Aires) | US$4,000 | **Ready, with warning.** USDT on Tron → registered PSAV → CVU. Rate-spread warning shown. |
-| 4 | Transportes Orinoco C.A. (Caracas) | US$12,500 | **Blocked.** VE-OFAC memo. |
+| 1 | Estúdio Paulista Design Ltda (São Paulo) | R$85,000 | **Ready, with warning.** USDC on Base → Ponte Digital, a VASP that hasn't filed for BCB authorization yet (deadline Oct 30) → Pix, purpose code 46978 filled. Sep 30: the cheaper eFX route (PagaFX). Oct 31: switches to the authorized VASP (Sol). |
+| 2 | Autopartes del Norte S.A. de C.V. (Monterrey) | MX$1,200,000 | **Awaiting 2nd approver** (over $50k). USDC → SAT-registered non-bank platform (Puente MX) → SPEI. |
+| 3 | Lucía Fernández, contractor (Buenos Aires) | US$4,000 | **Ready, with warning.** USDT on Tron → registered PSAV → CVU. Rate-spread warning shown (BCRA wholesale 1,518 vs. USDT/ARS 1,619, a 6.7% gap; business risk, not a legal rule). |
+| 4 | Transportes Orinoco C.A. (Caracas) | US$12,500 | **Blocked.** VE-OFAC sanctions-review hold (company policy, not a country-wide ban). |
 
 1. **0:00 Hook:** "Paying Latin America costs 3–7% and days. Stablecoins fix the money. Corredor fixes everything else."
 2. **0:20** Drop the four invoices. Fields extract live.
 3. **0:50** Statuses appear: Ready, Awaiting 2nd approver, Warning, Blocked. Open Brazil and show the route comparison and the cited rules checklist.
-4. **1:30 Rule-change moment:** drag the date to Sep 30 and Brazil uses the cheaper eFX provider. Drag to Oct 1 and it reroutes ("BR-561-EFX took effect"). Drag to Oct 30 and it reroutes again to the authorized VASP ("BR-VASP-AUTH: transition ended"). Back to today.
+4. **1:30 Rule-change moment:** drag the date to Sep 30 and Brazil uses the cheaper eFX provider. Drag to Oct 1 and it reroutes ("BR-561-EFX took effect"); Ponte shows a "hasn't filed for authorization" warning. Drag to Oct 31 and it reroutes again to the authorized VASP ("BR-VASP-AUTH took effect: Missed the Oct 30 BCB filing deadline"). Back to today.
+   - Say it right: Oct 30 is the deadline to **file** for authorization, not to be authorized. Oct 30 itself is still a valid filing day, which is why the reroute happens on Oct 31. Sol VASP is fictional, and no SPSAV has been authorized yet. See [RULES-SOURCES.md](./RULES-SOURCES.md) §6–8.
 5. **2:00** Approve Brazil, then second-approve Mexico. Pay and show the simulated IDs.
 6. **2:20** Ledger: the matched journal entry with the FX line. Audit: chain verified.
 7. **2:40 Close:** "Ramp and Bitso move the money. Corredor is the compliance brain across every rail. AI reads and explains, code decides, you approve."
@@ -160,7 +163,9 @@ Seed data: four invoices, all names fictional.
 
 | Risk | Mitigation |
 |---|---|
-| Legal detail wrong | Sourced rules pack, labeled "pending compliance review"; verify the BR rows before the pitch |
+| Legal detail wrong | Every rule verified against primary sources on Oct 17 with an independent adversarial check ([RULES-SOURCES.md](./RULES-SOURCES.md)). Still labeled "pending compliance review"; rules that are company policy say so. |
+| A judge challenges a contested reading (art. 91 and pending VASPs, the US$100k cap per payment, Venezuela) | Judge Q&A and "words to avoid" in RULES-SOURCES.md §7–8. Warn rather than block where the law is unclear. |
+| A rule changes on pitch day (OFAC general licenses move almost daily; CNV RG 1172 took effect Oct 16) | Re-check the OFAC Venezuela page right before the pitch. Rules are data, so a change is one JSON row. |
 | Sandbox access gated | Same rail interface plus a mock; decide at 10:30 |
 | Extraction misfires live | Pinned demo PDFs, fields editable, cached extraction for the four demo invoices |
 | "Ramp already does this" | Competition slide: they own the rail, we're the compliance layer across all rails |

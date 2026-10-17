@@ -23,24 +23,25 @@ Status key: **Decided** · **Open** (needs a call) · **Superseded**
 - **Why:** CFOs on Reddit say they distrust AI touching the books ("probabilistic, not deterministic"). This scores on Technical Execution and on AI trust and governance.
 
 ### D4. Scope: Brazil, Mexico, Argentina and Venezuela, with Colombia as a stretch. **Decided**
-- Each corridor demonstrates something different: BR shows rule changes over time (Res. 521 / 561, the VASP deadline), MX the bank ban, AR the PSAV registry and FX spread, VE a sanctions hard stop.
+- Each corridor demonstrates something different: BR shows rule changes over time (Res. 521 / 561, the Oct 30 VASP filing deadline), MX the bank ban, AR the PSAV registry and FX spread, VE a sanctions-review hold.
 
-### D5. Rules pack v1: 9 rules, each with an effective date and source. **Decided**
-- BR-521-FX · BR-521-CAP · BR-561-EFX · BR-VASP-PENDING-WARN · BR-VASP-AUTH · MX-BANK-CRYPTO · AR-PSAV · AR-FX-SPREAD · VE-OFAC.
+### D5. Rules pack: 11 rules, each with an effective date and a primary source. **Decided** (updated Oct 17: was 9 rules)
+- BR-521-FX · BR-521-CAP · BR-561-EFX · BR-VASP-PENDING-WARN · BR-VASP-UNFILED-WARN · BR-VASP-AUTH · BR-VASP-ART91 · MX-BANK-CRYPTO · AR-PSAV · AR-FX-SPREAD · VE-OFAC.
 - Labeled in the UI as "sourced · pending compliance review". It is not legal advice.
-- **Verified Oct 17, 2026** against the primary texts (BCB Res. 520/521/561/589 via the BCB normative API, Banxico Circular 4/2019, CNV RG 994/2024, OFAC). Confirmed: BR-521-FX/CAP effective Feb 2, 2026 (USD 100k per transaction for SPSAVs when the counterparty isn't FX-authorized); BR-561-EFX effective Oct 1, 2026 (Res. 561, art. 50). Fixed: MX effective date (Mar 9, 2019), AR-PSAV date (Mar 25, 2024), messages and sources.
-- ⚠ **Open decision, BR-VASP-AUTH:** Oct 30, 2026 is the *filing* deadline for incumbent VASPs (Res. 520, art. 88). A VASP that filed may keep operating until the BCB decides, and as of Sep 2026 none had been authorized. What changes on **Nov 6, 2026** is that Brazilian banks and payment institutions can't deal with unauthorized VASPs (Res. 589 moved this from Oct 30). The pack keeps Oct 30 for the demo and says so in the rule message. To follow the law more closely, set `effectiveTo` of BR-VASP-PENDING-WARN to 2026-11-05 and `effectiveFrom` of BR-VASP-AUTH to 2026-11-06, add `2026-11-06` to `DEMO_DATES`, and update test/rules.test.ts.
+- ✓ **Follow-up resolved (Oct 17):** every rule was checked against the regulator's own text, with an independent agent trying to refute each finding. Three rules were materially wrong (BR-VASP-PENDING-WARN, BR-VASP-AUTH, VE-OFAC) and were fixed; the rest got date, wording or source fixes; two rules were added. The MX date is 2019-03-09; the AR registry dates from 2024-03-25 (CNV RG 994), with the chapter replaced by RG 1172/2026 from Oct 16. Details, quotes and the contested points are in [RULES-SOURCES.md](./RULES-SOURCES.md).
 
 ### D6. Approval policy (a light version of Agent Passport). **Decided**
 - A second approver is required above **$50,000**. Daily cap is **$150,000**.
 
 ### D7. Demo data: four fictional invoices plus a registry of fictional providers. **Decided**
 - Estúdio Paulista (BR, R$85,000) · Autopartes del Norte (MX, MX$1.2M) · Lucía Fernández (AR, US$4,000) · Transportes Orinoco (VE, US$12,500).
-- Providers are designed so the cheapest option is non-compliant somewhere. Brazil reroutes **three times** on the slider: PagaFX (Sep 30) → Ponte (Oct 1, with a warning) → Sol VASP (Oct 30).
-- FX rates are labeled as demo data. No real money moves.
+- Providers are designed so the cheapest option is non-compliant somewhere. Brazil shows **three distinct routes** on the slider: PagaFX (Sep 30) → Ponte Digital (Oct 1–30, with a "hasn't filed for BCB authorization" warning) → Sol VASP (Oct 31). See D22.
+- Sol VASP being "authorized" is hypothetical: no SPSAV had been authorized as of mid-October 2026. Say so on stage.
+- FX rates are labeled as demo data. The ARS pair is a 2026-10-16 snapshot: BCRA wholesale 1,518 vs. USDT/ARS 1,619. No real money moves.
 
 ### D8. The demo centerpiece is the rule-change moment. **Decided**
-- Drag the as-of date Sep 30 → Oct 1 → Oct 30 and the route changes on screen, naming the rule that caused it. None of the competitors shows this.
+- Drag the as-of date Sep 30 → Oct 1 → Oct 31 and the route changes on screen, naming the rule that caused it (BR-561-EFX, then BR-VASP-AUTH). None of the competitors shows this.
+- On stage, Oct 30 is the deadline to **file** for BCB authorization, not to be authorized. Use the wording in RULES-SOURCES.md §8.
 
 ## Stack
 
@@ -102,11 +103,22 @@ Status key: **Decided** · **Open** (needs a call) · **Superseded**
 ### D21. Docs live in both repos under `docs/`. **Decided**
 - Same files in `tic-api` and `tic-web`. If you edit one, copy it to the other.
 
+### D22. Brazil reroute moves from Oct 30 to Oct 31. **Decided**
+- **What:** Ponte Digital is now a provider that is operating but **has not filed** for BCB authorization (new offramp type `vasp_unfiled`, replacing `vasp_pending`). It is warned through Oct 30 (BR-VASP-UNFILED-WARN) and blocked from Oct 31 (BR-VASP-AUTH, retitled "Missed the Oct 30 BCB filing deadline"), so Brazil reroutes to Sol VASP on **Oct 31**. The slider stop, `DEMO_DATES`, golden tests and the `plan-all.2026-10-31.json` fixture all move from Oct 30 to Oct 31. BR-VASP-PENDING-WARN no longer ends Oct 29. BR-VASP-ART91 (from Nov 6) is added. BR-521-CAP now also covers `vasp_unfiled`.
+- **Why:** Oct 30, 2026 is the deadline to **file** for authorization (Res. BCB 520 art. 88 I; IN BCB 704 art. 9: "até 30 de outubro de 2026"), not a deadline to be authorized. A provider that files on time may keep operating while the BCB decides (art. 88 §6). The old demo, which blocked a pending VASP on Oct 30, had no legal basis. Oct 30 is still a valid filing day, so the earliest defensible block for a non-filer is Oct 31. From then it must stop within 30 days (art. 88 §7, about Nov 29), and from Nov 6 Brazilian banks may not deal with it (art. 91 per Res. 589). Blocking on Oct 31 is Corredor policy, and the rule message says so.
+- **Alternatives considered:**
+  - Keep Ponte as `vasp_pending` and reroute on Nov 6 by making BR-VASP-ART91 a block. Rejected: it rests on the literal, contested reading of the amended art. 91, which the BCB's own press note contradicts.
+  - Reuse `p2p_unregistered` for the Brazilian non-filer, which needs no contract change. Rejected: the label reads wrong in the UI.
+- **Consequences:** `vasp_unfiled` was added to `src/contracts.ts`, so `tic-web/src/lib/contracts.ts` must be re-copied (D18). The fixtures were regenerated. Sources and Q&A are in [RULES-SOURCES.md](./RULES-SOURCES.md).
+
 ## Open items
 
 | # | Item | Owner | When |
 |---|---|---|---|
-| D5 | Decide whether BR-VASP-AUTH moves from Oct 30 to Nov 6 (dates and sources are otherwise verified) | BE1 + compliance | Before the pitch |
+| ~~D5~~ | ~~Verify BR/MX/AR rule dates and sources~~ Resolved Oct 17, see [RULES-SOURCES.md](./RULES-SOURCES.md) | BE1 | Done |
+| D5 | Human compliance review of the rules pack (still labeled "pending compliance review") | Compliance reviewer | Before any production use |
+| D5 | Re-check the OFAC Venezuela page for new general licenses (they change almost daily) | BE1 | Right before the pitch |
+| D21/D22 | Copy the updated docs (incl. RULES-SOURCES.md) and `contracts.ts` to `tic-web` | BE1 | Before the first integration checkpoint after the change |
 | D10 | rsbuild vs. Vite | FE lead | Before the first integration checkpoint |
 | D14 | Bridge/BlindPay sandbox or mock | BE3 | 10:30 |
 | — | Write access for `yoyoarmy` to `tokeico/tic-api` (pushes are currently rejected) | Repo admin | ASAP |
