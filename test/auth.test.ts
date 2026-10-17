@@ -88,7 +88,10 @@ suite("database authentication and workspace isolation", () => {
     const payouts = await call("/api/payouts", { cookie });
     expect(payouts.status).toBe(200);
     ownPayouts = payouts.body;
-    expect(ownPayouts.map((p) => p.country)).toEqual(["BR", "MX", "AR", "VE"]);
+    // The four PRD invoices lead (the tour finds them first); booked history follows.
+    expect(ownPayouts.slice(0, 4).map((p) => p.country)).toEqual(["BR", "MX", "AR", "VE"]);
+    expect(ownPayouts.length).toBeGreaterThan(4);
+    expect(ownPayouts.slice(4).every((p) => p.status === "booked")).toBe(true);
     const members = await call("/api/auth/members", { cookie });
     expect(members.body.length).toBe(1);
     expect(members.body[0].name).toBe(owner.name);

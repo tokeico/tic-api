@@ -8,6 +8,7 @@ import { demoVendorRows } from "./vendors";
 import { currentPrincipal, db, schema } from "../db";
 import { ApiError } from "../http-error";
 import { DEFAULT_AS_OF } from "./settings";
+import { seedHistory } from "./demo-history";
 
 const { invoices, payouts, settings, users, vendors } = schema;
 
@@ -76,6 +77,8 @@ export async function resetDemo(): Promise<{ users: number; payouts: number }> {
       { key: "demo_as_of", value: DEFAULT_AS_OF() },
       { key: "rules_version", value: "v1" },
     ]);
+    // A workspace's books keep their history; the legacy database (tests, db:seed) stays at the four PRD invoices.
+    if (principal && process.env.DEMO_HISTORY !== "off") await seedHistory(tx);
   });
   const memberCount = principal ? (await db.select({ id: users.id }).from(users)).length : DEMO_USERS.length;
   return { users: memberCount, payouts: demoInvoices.length };

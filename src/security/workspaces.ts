@@ -3,6 +3,7 @@ import type { adminDb } from "../db";
 import { DEFAULT_POLICY, DEMO_INVOICES } from "../corredor";
 import { invoices, payouts, settings, users, vendors } from "../db/schema";
 import { demoVendorRows } from "../services/vendors";
+import { seedHistory } from "../services/demo-history";
 
 type Transaction = Parameters<Parameters<typeof adminDb.transaction>[0]>[0];
 const tables = ["users", "vendors", "invoices", "extraction_cache", "payouts", "screenings", "sanctions_reviews", "security_holds", "plans", "memos", "vendor_requests", "approvals", "payments", "reconciliations", "journal_entries", "journal_lines", "audit_events", "audit_checkpoints", "settings"];
@@ -49,4 +50,6 @@ export async function seedWorkspace(tx: Transaction, schemaName: string, owner: 
     { key: "demo_as_of", value: process.env.DEMO_DEFAULT_AS_OF ?? "2026-10-17" },
     { key: "rules_version", value: "v1" },
   ]);
+  // DEMO_HISTORY=off keeps a new workspace to the four PRD invoices (the workflow tests).
+  if (process.env.DEMO_HISTORY !== "off") await seedHistory(tx);
 }
