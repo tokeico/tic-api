@@ -47,6 +47,8 @@ docker run --env-file .env -p 3000:3000 tic-api
 
 `DATABASE_URL` must reach Postgres from inside the container (a compose network or `host.docker.internal`, not localhost). The entrypoint applies migrations before starting, and the image bundles `data/` and `drizzle/`. From the hackathon root, `docker compose up -d --build` (see `../docker-compose.yml`) runs db + api + web at http://localhost:8080.
 
+Migrations apply automatically at start, but the demo data needs a one-off seed: `docker compose exec api bun run src/db/seed.ts` from the hackathon root. It wipes and reseeds, which is also how you reset before the pitch.
+
 ## Checks
 
 ```sh
