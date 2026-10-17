@@ -68,12 +68,21 @@ Agent tab ──POST /api/agent/chat { messages, asOf }──▶ src/llm/agent.t
 
 1. sha256 of the PDF. Same PDF twice → `409 duplicate_invoice`. `extraction_cache` hit → no model call (the cache survives `db:seed`, so pre-warmed demo PDFs work offline).
 2. Text with `unpdf` (no vision model). No text layer → `422 no_text`. Not a PDF → `400 not_pdf`.
-3. **Pre-pass:** regexes find CLABE, CVU, Pix keys, BICs, CNPJ, RFC, CUIT and RIF; checksums validate them. A validated value always beats the model.
-4. **Model:** Ollama structured output (`format` = JSON schema, temperature 0, `num_predict` capped). Keep the schema to plain strings: nullable unions made llama3.1 stall until the timeout.
-5. **lowConfidence is computed, not asked:** a field is flagged when it is missing, fails validation, or isn't found in the PDF text (grounding). The model's own "unsure" list was unreliable.
-6. One transaction: invoice + draft payout + `extracted` audit event (field names only, no identifiers); then the payout is planned.
+3. **Prompt-injection scan** (`src/llm/injection.ts`): instruction-like lines (EN/ES/PT: "ignore previous instructions", "do not tell the controller", AI-addressed payment pressure) are flagged and quoted verbatim. Findings put the payout on a **security hold**: approval is refused (`409 security_hold`) until a person records `POST /api/payouts/:id/security-review` (`cleared` or `confirmed_suspicious`); rejections stay possible. The scan runs even on extraction-cache hits, the quotes live in `security_holds`, and the audit carries masked quotes only.
+4. **Pre-pass:** regexes find CLABE, CVU, Pix keys, BICs, CNPJ, RFC, CUIT and RIF; checksums validate them. A validated value always beats the model.
+5. **Model:** Ollama structured output (`format` = JSON schema, temperature 0, `num_predict` capped). Keep the schema to plain strings: nullable unions made llama3.1 stall until the timeout.
+6. **lowConfidence is computed, not asked:** a field is flagged when it is missing, fails validation, or isn't found in the PDF text (grounding). The model's own "unsure" list was unreliable.
+7. One transaction: invoice + draft payout + `extracted` audit event (field names only, no identifiers); then the payout is planned.
 
 Demo PDFs: `bun run scripts/demo-pdfs.ts` writes the four demo invoices to `data/invoices/` (byte-stable, so cached extractions keep matching). Uploading them while the seeded demo set exists creates second copies; for a clean upload demo, reset first and upload instead of "Load the demo invoices".
+
+## Sanctions sign-off (`POST /api/payouts/:id/sanctions-review`)
+
+`src/services/payouts.ts` + the rules pack. VE-OFAC is a **policy hold**, not a country-wide ban: it carries `liftedBy: "sanctions_signoff"` in `rules.json`, and only a compliance person can lift it. The request records `{ reviewer, decision: released | confirmed_blocked, licenseRef?, note }` (what was checked; the OFAC general license is optional — the release can rest on "nobody blocked is involved").
+
+- The engine turns the block into a **warning that names the sign-off** ("Compliance sign-off recorded by Daniel Ortiz under OFAC general license GL 57…"), so the checklist, the plan reasons and the memo all show why the hold was lifted and by whom. The wire is then the compliant route for VE (no demo off-ramp covers Venezuela).
+- The release covers the payee name and bank details **as reviewed**: edit either and the next plan treats the hold as back in force.
+- Both decisions are audited (`sanctions_reviewed`) and returned as `PayoutDetail.sanctionsReview`.
 
 ## Memos (`POST /api/payouts/:id/memo`)
 

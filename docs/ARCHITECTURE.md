@@ -272,13 +272,15 @@ export async function chatJSON<T extends z.ZodType>(schema: T, system: string, u
 | GET | `/api/payouts` · `/api/payouts?detail=1` · `/api/payouts/:id` | `PayoutSummary[]` · `PayoutDetail[]` (one request for the whole UI) · `PayoutDetail` (with a template memo and a plan `fingerprint`) |
 | GET | `/api/payouts/:id/preview?asOf=&registry=id:type` | dry run: the plan on another date, optionally with a hypothetical registry update. Stores nothing |
 | GET | `/api/payouts/:id/replay?n=100` | recompute the plan n times → `{ identical, matchesStored, fingerprint, ms }` (determinism proof) |
-| POST | `/api/invoices` | multipart PDF (`file`) → text → checksum pre-pass + local model → invoice + payout → plan. `409` duplicate, `422` no text layer, `503` model down (cache hits still work). See docs/AGENT.md |
+| POST | `/api/invoices` | multipart PDF (`file`) → text → injection scan → checksum pre-pass + local model → invoice + payout (+ security hold if flagged) → plan. `409` duplicate, `422` no text layer, `503` model down (cache hits still work). See docs/AGENT.md |
 | POST | `/api/payouts/:id/memo` | the local model writes the memo for the current plan; citation and decision guards, else the template stays |
 | POST/GET | `/api/agent/chat` · `/api/agent/status` | the Agent tab's local model (read-only tools + proposals) |
 | PATCH | `/api/payouts/:id` | edit invoice fields → re-plan. A failed checksum puts the field back in `lowConfidence`. Approved payouts are frozen (409 `plan_locked`) |
 | POST | `/api/payouts/:id/plan?asOf=` | screen + quote + rules → `Plan`, then memo |
 | POST | `/api/plan-all?asOf=` | re-plan all open payouts → `{ payouts, reroutes }` (the slider calls this) |
 | POST | `/api/payouts/:id/screening-review` | `{ reviewer, decision, note }`: a person clears or confirms a sanctions match (controller / approver only) |
+| POST | `/api/payouts/:id/sanctions-review` | `{ reviewer, decision, licenseRef?, note }`: a compliance person releases the VE-OFAC policy hold (or confirms it). A release turns the block into a warning naming the sign-off; it covers the payee and bank details as reviewed, so editing either re-arms the hold |
+| POST | `/api/payouts/:id/security-review` | `{ reviewer, decision, note }`: a person clears the security hold (instruction-like text) or keeps the payout held as suspicious. Approvals are refused while it is uncleared; rejections stay possible |
 | POST | `/api/payouts/:id/approve` | `{ approver, decision?, comment? }`; `approver` is a user id, name or email; second approval if over the cap |
 | POST | `/api/payouts/:id/pay` | `RailAdapter.send(recommended)`; optional `{ by }` names the person in the audit log |
 | POST | `/api/payouts/:id/reconcile` | match → journal entry; optional `{ by }` |
