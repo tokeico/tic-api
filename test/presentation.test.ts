@@ -24,7 +24,7 @@ describe("fictional presentation screening", () => {
     for (const invoice of DEMO_INVOICES) expect(screenName(invoice.payeeName, list).status).toBe("clear");
   });
 
-  test("sandbox responses are labeled simulated and reject invalid input", async () => {
+  test("sandbox responses are labeled simulated", async () => {
     const response = await demoRoutes.request("/screen?name=Demo%20Lumen%20Trading");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ simulated: true, status: "hit", matchedEntryId: "900001" });
