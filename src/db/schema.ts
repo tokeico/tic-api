@@ -105,6 +105,36 @@ export const users = pgTable("users", {
   createdAt: createdAt(),
 });
 
+// ---- Vendors -----------------------------------------------------------------
+
+/** Master vendor record (C9): the bank details a person verified by calling
+ *  the vendor back on a number from their own records — never one printed on
+ *  the invoice. Plans hold a payout whose invoice bank details don't match
+ *  this record until someone re-verifies. Keyed by (country, normalized tax id). */
+export const vendors = pgTable(
+  "vendors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    country: countryEnum("country").notNull(),
+    /** Normalized: uppercase, whitespace, dots, slashes and dashes stripped. */
+    taxId: text("tax_id").notNull(),
+    name: text("name").notNull(),
+    bankIdType: localRailEnum("bank_id_type").notNull(),
+    bankIdValue: text("bank_id_value").notNull(),
+    /** Who recorded the call-back verification; null for seeded records. */
+    verifiedBy: uuid("verified_by").references(() => users.id),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    verificationNote: text("verification_note").notNull(),
+    source: text("source").notNull().default("callback"), // "seed" | "callback"
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("vendors_country_tax_id_uq").on(t.country, t.taxId),
+    check("vendors_source", sql`${t.source} IN ('seed', 'callback')`),
+  ],
+);
+
 // ---- Invoices --------------------------------------------------------------
 
 /** Invoice facts as extracted by Claude, editable by a human before planning. */
@@ -355,6 +385,8 @@ export const approvals = pgTable(
     decision: approvalDecisionEnum("decision").notNull(),
     amountUsd: money("amount_usd").notNull(), // snapshot, for the daily cap
     comment: text("comment"),
+    /** Warning rule ids the approver saw and accepted (P5). */
+    acknowledgedWarnings: text("acknowledged_warnings").array().notNull().default(sql`'{}'::text[]`),
     createdAt: createdAt(),
   },
   (t) => [
@@ -517,6 +549,10 @@ export const usersRelations = relations(users, ({ many }) => ({
   approvals: many(approvals),
 }));
 
+export const vendorsRelations = relations(vendors, ({ one }) => ({
+  verifier: one(users, { fields: [vendors.verifiedBy], references: [users.id] }),
+}));
+
 export const invoicesRelations = relations(invoices, ({ one }) => ({
   payout: one(payouts),
 }));
@@ -600,6 +636,8 @@ export const auditEventsRelations = relations(auditEvents, ({ one }) => ({
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type Vendor = typeof vendors.$inferSelect;
+export type NewVendor = typeof vendors.$inferInsert;
 export type InvoiceRow = typeof invoices.$inferSelect;
 export type NewInvoiceRow = typeof invoices.$inferInsert;
 export type Payout = typeof payouts.$inferSelect;

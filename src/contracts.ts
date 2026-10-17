@@ -180,6 +180,18 @@ export const DemoScreening = Screening.extend({
 });
 export type DemoScreening = z.infer<typeof DemoScreening>;
 
+/**
+ * Whether the invoice's bank details match the verified vendor record
+ * (C9 call-back hold). Fed to the engine as an optional input and echoed on
+ * the Plan; nothing about the bank account itself is included.
+ */
+export const BankDetailsCheck = z.object({
+  status: z.enum(["verified", "changed", "unverified"]),
+  verifiedBy: z.string().nullable(), // who recorded the call-back check; null for seeded records
+  verifiedAt: z.string().nullable(), // ISO 8601
+});
+export type BankDetailsCheck = z.infer<typeof BankDetailsCheck>;
+
 /** Output of the rules engine. Deterministic: same inputs + asOf → same JSON. */
 export const Plan = z.object({
   payoutId: z.string(),
@@ -190,6 +202,7 @@ export const Plan = z.object({
   recommended: Route.nullable(), // cheapest compliant
   status: PayoutStatus,
   reasons: z.array(z.string()), // human-readable, from rule messages
+  bankDetails: BankDetailsCheck.optional(), // present when the caller checked the vendor record
 });
 export type Plan = z.infer<typeof Plan>;
 
@@ -229,8 +242,19 @@ export const ApproveRequest = z.object({
   approver: z.string().min(1), // user id (a name or email also works; controller / approver roles only)
   decision: z.enum(["approved", "rejected"]).default("approved"),
   comment: z.string().optional(),
+  /** Rule ids on the recommended route whose warnings the approver saw and accepted (P5). */
+  acknowledgedWarnings: z.array(z.string()).default([]),
 });
 export type ApproveRequest = z.infer<typeof ApproveRequest>;
+
+/**
+ * POST /api/payouts/:id/bank-verification. Records that the approver called
+ * the vendor back on a known number and confirmed the bank details (C9).
+ */
+export const BankVerificationRequest = z.object({
+  note: z.string().trim().min(5, "say how the bank details were verified"),
+});
+export type BankVerificationRequest = z.infer<typeof BankVerificationRequest>;
 
 /** POST /api/payouts/:id/screening-review. A possible match or hit blocks the payout until a person records this. */
 export const ScreeningReviewRequest = z.object({
@@ -345,6 +369,11 @@ export const AuditEventType = z.enum([
   "sanctions_reviewed",
   "security_flagged",
   "security_reviewed",
+  // Added with the vendor call-back hold and two-person policy rule (appended).
+  "bank_verified",
+  "approval_voided",
+  "settings_change_requested",
+  "settings_change_cancelled",
 ]);
 export type AuditEventType = z.infer<typeof AuditEventType>;
 
@@ -394,11 +423,27 @@ export const PayoutSummary = z.object({
 });
 export type PayoutSummary = z.infer<typeof PayoutSummary>;
 
+/** Which safety checks actually ran on this payout — honest status, no assumed passes (U1). */
+export const PayoutChecks = z.object({
+  injectionScan: z.enum(["passed", "flagged", "not_run"]),
+  bankDetails: z.enum(["verified", "changed", "unverified"]),
+  duplicatePdf: z.enum(["passed", "not_run"]),
+});
+export type PayoutChecks = z.infer<typeof PayoutChecks>;
+
 export const PayoutDetail = PayoutSummary.extend({
   invoice: Invoice,
   plan: Plan.nullable(), // null while status = draft
   memo: Memo.nullable(),
-  approvals: z.array(z.object({ approver: z.string(), approverId: z.string().uuid().optional(), role: z.enum(["first", "second"]), at: z.string() })),
+  approvals: z.array(z.object({
+    approver: z.string(),
+    approverId: z.string().uuid().optional(),
+    role: z.enum(["first", "second"]),
+    at: z.string(),
+    acknowledgedWarnings: z.array(z.string()).optional(), // warning rule ids the approver accepted
+  })),
+  /** Check status shown on the payout page (U1). */
+  checks: PayoutChecks.optional(),
   /** Latest compliance sign-off on the sanctions policy hold, once one exists. */
   sanctionsReview: z
     .object({
@@ -453,6 +498,15 @@ export const Settings = z.object({
   objective: Objective,
   disabledOfframps: z.array(z.string()), // off-ramp ids switched off by a person
   registry: z.record(z.string(), OfframpType), // provider-registry updates a person approved, by off-ramp id
+  /** A policy change that loosens a limit, waiting on a second person's confirmation (C4). */
+  pendingPolicy: z
+    .object({
+      policy: Policy,
+      requestedBy: z.string(), // name
+      requestedById: z.string(),
+      requestedAt: z.string(), // ISO 8601
+    })
+    .nullable(),
 });
 export type Settings = z.infer<typeof Settings>;
 

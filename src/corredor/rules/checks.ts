@@ -64,7 +64,9 @@ export const checks: { [F in CheckFn]: (ctx: CheckContext, params: Params<F>) =>
     return { hit: missing.length > 0, missing };
   },
 
-  fxSpreadAbove: ({ fx }, { pct, pair }) => {
+  fxSpreadAbove: ({ invoice, fx }, { pct, pair }) => {
+    // Only meaningful when the invoice is denominated in the parallel-market currency.
+    if (invoice.currency !== pair) return { hit: false };
     const official = fx.rates[`${pair}_official`];
     const parallel = fx.rates[`${pair}_parallel`];
     if (official === undefined || parallel === undefined) return { hit: false };

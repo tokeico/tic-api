@@ -10,6 +10,8 @@ import {
   planHash,
   planPayout,
   reference,
+  activeRules,
+  evaluateRoute,
   replanAll,
   rulesActiveOn,
   warningCount,
@@ -64,18 +66,24 @@ describe("golden: demo invoices across the slider dates", () => {
     }
   });
 
-  test("AR is Pampa with an AR-FX-SPREAD warning showing both rates", () => {
+  test("AR is Pampa; AR-FX-SPREAD only warns when the invoice is in pesos (P7)", () => {
     for (const d of DEMO_DATES) {
       const p = planFor("ar", d);
       expect(recommendedOfframp(p)).toBe("ar-pampa");
       expect(p.status).toBe("ready");
-      const spread = resultFor(p, "AR-FX-SPREAD")!;
-      expect(spread.outcome).toBe("warn");
-      expect(spread.message).toContain("1,518");
-      expect(spread.message).toContain("1,619");
+      // The demo invoice is USD-denominated: the parallel-market spread is irrelevant to it.
+      expect(resultFor(p, "AR-FX-SPREAD")?.outcome).toBe("pass");
       const cueva = p.evaluations.find((e) => e.route.offramp?.id === "ar-cueva")!;
       expect(cueva.compliant).toBe(false);
     }
+    // An ARS-denominated invoice on the same route still warns, naming both rates.
+    const ars = { ...demoInvoice("ar"), currency: "ARS" };
+    const route = planFor("ar", "2026-10-17").recommended!;
+    const evaluation = evaluateRoute(route, ars, activeRules(reference().rules, "2026-10-17", "AR"), reference().fx);
+    const spread = evaluation.results.find((r) => r.ruleId === "AR-FX-SPREAD")!;
+    expect(spread.outcome).toBe("warn");
+    expect(spread.message).toContain("1,518");
+    expect(spread.message).toContain("1,619");
   });
 
   test("VE is blocked on every route with no recommendation", () => {
@@ -145,6 +153,37 @@ describe("engine edge cases", () => {
 
   test("missing bank identifier → needs_info", () => {
     expect(planFor("ar", "2026-10-17", { ...demoInvoice("ar"), bankId: null }).status).toBe("needs_info");
+  });
+
+  test("a bank identifier that fails its check → needs_info (P3)", () => {
+    const p = planFor("ar", "2026-10-17", { ...demoInvoice("ar"), bankId: { type: "cvu", value: "0000003110000123456780" } });
+    expect(p.status).toBe("needs_info");
+    expect(p.reasons.join(" ")).toContain("Bank identifier failed its check");
+  });
+
+  test("vendor bank-detail hold (C9): unverified and changed block with a call-back reason", () => {
+    const withBank = (bankDetails?: import("../src/contracts").BankDetailsCheck) =>
+      planPayout({ payoutId: "demo-br", invoice: demoInvoice("br"), asOf: "2026-10-17", screening: clear, bankDetails });
+    const unverified = withBank({ status: "unverified", verifiedBy: null, verifiedAt: null });
+    expect(unverified.status).toBe("blocked");
+    expect(unverified.reasons.join(" ")).toContain("No verified bank details on file for this vendor. Call the vendor back on a number from your records");
+    expect(unverified.bankDetails).toMatchObject({ status: "unverified" });
+    const changed = withBank({ status: "changed", verifiedBy: "Maria Lopez", verifiedAt: "2026-10-15T10:00:00.000Z" });
+    expect(changed.status).toBe("blocked");
+    expect(changed.reasons.join(" ")).toContain("Bank details differ from the verified vendor record. Call the vendor back on a number from your records");
+    expect(changed.bankDetails).toMatchObject({ status: "changed", verifiedBy: "Maria Lopez" });
+  });
+
+  test("vendor bank-detail hold (C9): verified keeps ready; absent check is unchanged", () => {
+    const verified = planPayout({
+      payoutId: "demo-br", invoice: demoInvoice("br"), asOf: "2026-10-17", screening: clear,
+      bankDetails: { status: "verified", verifiedBy: "Maria Lopez", verifiedAt: "2026-10-15T10:00:00.000Z" },
+    });
+    expect(verified.status).toBe("ready");
+    expect(verified.bankDetails?.status).toBe("verified");
+    const plain = planFor("br", "2026-10-17");
+    expect(plain.status).toBe("ready");
+    expect(plain.bankDetails).toBeUndefined();
   });
 
   test("BR above the USD 100k cap after Oct 1 falls back to the wire", () => {

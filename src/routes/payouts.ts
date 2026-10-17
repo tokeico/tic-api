@@ -4,7 +4,7 @@
 
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { ApproveRequest, InvoicePatch, OfframpType, SanctionsReviewRequest, ScreeningReviewRequest, SecurityReviewRequest } from "../contracts";
+import { ApproveRequest, BankVerificationRequest, InvoicePatch, OfframpType, SanctionsReviewRequest, ScreeningReviewRequest, SecurityReviewRequest } from "../contracts";
 import { isIsoDate } from "../corredor";
 import { ApiError } from "../http-error";
 import * as svc from "../services/payouts";
@@ -102,6 +102,11 @@ payoutRoutes.post("/:id/security-review", async (c) =>
 );
 
 payoutRoutes.post("/:id/approve", async (c) => c.json(await svc.approve(c.req.param("id"), { ...await body(c, ApproveRequest), approver: requirePrincipal().userId })));
+
+/** POST /api/payouts/:id/bank-verification  Call-back check on the vendor's bank details (C9). */
+payoutRoutes.post("/:id/bank-verification", async (c) =>
+  c.json(await svc.verifyBankDetails(c.req.param("id"), await body(c, BankVerificationRequest), requirePrincipal().userId)),
+);
 
 payoutRoutes.post("/:id/pay", async (c) => {
   await optionalBody(c, WithBy);

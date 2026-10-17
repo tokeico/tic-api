@@ -150,6 +150,16 @@ describe("mock rail, reconciliation and journal", () => {
     expect(lines[1]).toBe(`JE-1,2026-10-17,"Accounts Payable – Foo, Inc",10.00,,"'=HYPERLINK(""x"")",p1,USD`);
     expect(lines[2]).toBe("JE-1,2026-10-17,Cash,,10.00,d,p1,USD");
   });
+
+  test("CSV Name column uses the payee name when provided (P10)", () => {
+    const csv = journalToCsv([
+      {
+        payoutId: "p1", name: "Acme SA", entryDate: "2026-10-17", description: "d", currency: "USD", bookingRate: 1, settleRate: 1,
+        lines: [{ lineNo: 1, account: "Cash", description: null, debit: 0, credit: 10 }],
+      },
+    ]);
+    expect(csv.trim().split("\r\n")[1]).toBe("CORR-0001,2026-10-17,Cash,,10.00,d,Acme SA,USD");
+  });
 });
 
 describe("field validation", () => {
@@ -179,6 +189,30 @@ describe("field validation", () => {
 });
 
 describe("OFAC screening (committed SDN snapshot)", () => {
+  test("the 0009 migration backfills exactly the demoVendorRows() literals", async () => {
+    const { demoVendorRows } = await import("../src/services/vendors");
+    const sql = await Bun.file("drizzle/0009_modern_shiva.sql").text();
+    const block = sql.match(/INSERT INTO %I\.vendors[\s\S]*?ON CONFLICT \(country, tax_id\) DO NOTHING/);
+    expect(block).not.toBeNull();
+    const literalRows = [...block![0].matchAll(/\('([A-Z]{2})', '([^']+)', '([^']+)', '([a-z_]+)', '([^']+)', NULL, now\(\), '([^']+)', 'seed'\)/g)].map((m) => ({
+      country: m[1],
+      taxId: m[2],
+      name: m[3],
+      bankIdType: m[4],
+      bankIdValue: m[5],
+      verificationNote: m[6],
+    }));
+    const expected = demoVendorRows().map(({ country, taxId, name, bankIdType, bankIdValue, verificationNote }) => ({
+      country,
+      taxId,
+      name,
+      bankIdType,
+      bankIdValue,
+      verificationNote,
+    }));
+    expect(literalRows).toEqual(expected);
+  });
+
   test("demo payees are clear", async () => {
     for (const d of DEMO_INVOICES) expect((await screenPayee(d.payeeName)).status).toBe("clear");
   });
@@ -189,5 +223,34 @@ describe("OFAC screening (committed SDN snapshot)", () => {
     const look = await screenPayee("Petroleo de Venesuela SA");
     expect(look.status).toBe("possible_match");
     expect(look.match).toContain("PETROLEOS DE VENEZUELA");
+  });
+
+  test("the six sanctioned spellings are all non-clear (C5)", async () => {
+    for (const name of ["P.D.V.S.A.", "PDVSA", "N. Maduro", "Maduro Moros", "Nicolas Maduro", "Petróleos de Venezuela"]) {
+      const r = await screenPayee(name);
+      expect(r.status).not.toBe("clear");
+    }
+  });
+
+  test("ordinary LatAm business names stay clear (no false positives)", async () => {
+    const names = [
+      "Estúdio Paulista Design Ltda",
+      "Autopartes del Norte SA de CV",
+      "Transportes Rápidos del Sur",
+      "Comercial Andina SRL",
+      "J. Silva Consultoria",
+      "Farmácia Central do Brasil",
+      "Distribuidora Mexicana del Pacífico",
+      "Inversiones Caribe Ltda",
+      "Servicios Logísticos del Bajío",
+      "Alimentos del Valle SA",
+      "Constructora Horizonte SAS",
+      "Importadora Pacífico Sur",
+      "Textiles Andinos EIRL",
+      "Grupo Frontera Norte",
+      "Panificadora Estrela Ltda",
+      "Consultores del Plata SA",
+    ];
+    for (const name of names) expect((await screenPayee(name)).status).toBe("clear");
   });
 });

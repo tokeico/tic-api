@@ -216,7 +216,7 @@
       }
     },
     "outcome": "warn",
-    "message": "Business risk, not a legal rule: the USDT/ARS (crypto dollar) rate is more than 5% above the BCRA official wholesale rate. If the invoice is in pesos, agree with the supplier which rate converts it before paying.",
+    "message": "Business risk, not a legal rule: the USDT/ARS (crypto dollar) rate is more than 5% above the BCRA official wholesale rate. The invoice is in pesos: agree with the supplier which rate converts it before paying.",
     "source": {
       "name": "BCRA Com. A 3500 wholesale rate (official API); USDT/ARS market rate (demo snapshot 2026-10-16)",
       "url": "https://api.bcra.gob.ar/estadisticascambiarias/v1.0/Cotizaciones/USD"

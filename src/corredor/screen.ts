@@ -98,6 +98,8 @@ export function normalizeName(name: string): string[] {
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toUpperCase()
+    // Dotted acronyms collapse before punctuation stripping: "P.D.V.S.A." → "PDVSA".
+    .replace(/\b(?:[A-Z]\.){2,}[A-Z]?\.?/g, (m) => m.replace(/\./g, ""))
     .replace(/&/g, " AND ")
     .replace(/[^A-Z0-9]+/g, " ")
     .trim()
@@ -148,6 +150,16 @@ export function jaroWinkler(a: string, b: string): number {
  *  floor, Jaro-Winkler gives ~0.6 to random pairs and inflates every score. */
 export const TOKEN_FLOOR = 0.85;
 
+/** Token similarity: identical → 1; a single letter matching the longer
+ *  token's initial → 0.9 ("N." vs "NICOLAS", either direction); otherwise
+ *  Jaro-Winkler. */
+export function tokenSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (a.length === 1 && b.length > 1 && b.startsWith(a)) return 0.9;
+  if (b.length === 1 && a.length > 1 && a.startsWith(b)) return 0.9;
+  return jaroWinkler(a, b);
+}
+
 /** How well `from`'s tokens are covered by `to`'s, weighted by token length. */
 function coverage(from: string[], to: string[]): number {
   let total = 0;
@@ -155,7 +167,7 @@ function coverage(from: string[], to: string[]): number {
   for (const t of from) {
     let best = 0;
     for (const u of to) {
-      const s = jaroWinkler(t, u);
+      const s = tokenSimilarity(t, u);
       if (s > best) best = s;
       if (best === 1) break;
     }
@@ -175,28 +187,48 @@ function coverage(from: string[], to: string[]): number {
 export function nameScore(query: string[], listed: string[]): number {
   if (query.length === 0 || listed.length === 0) return 0;
   if (query.join(" ") === listed.join(" ")) return 1;
-  return 0.65 * coverage(query, listed) + 0.35 * coverage(listed, query);
+  const covQuery = coverage(query, listed);
+  const covListed = coverage(listed, query);
+  let score = 0.65 * covQuery + 0.35 * covListed;
+  // Subset boost: the query is fully covered by a longer listed name
+  // ("Maduro Moros" vs "MADURO MOROS, Nicolas", "N. Maduro" via initials).
+  // Requires real tokens (an initial alone isn't enough) and at least half of
+  // the listed name explained, so one shared word still can't flag.
+  const fullyCovered =
+    query.length >= 2 &&
+    query.some((t) => t.length >= 3) &&
+    query.every((t) => listed.some((u) => tokenSimilarity(t, u) >= TOKEN_FLOOR)) &&
+    covQuery >= 0.97 &&
+    covListed >= 0.5;
+  if (fullyCovered) score = Math.max(score, 0.9);
+  return score;
 }
 
 // ---- List loading -------------------------------------------------------------------
 
-/** Build the list from sdn.csv (+ optional alt.csv) text. */
-export function buildSdnList(sdnCsv: string, altCsv: string | null, version: string): SdnList {
+/**
+ * Build the list from sdn.csv (+ optional alt.csv) text. Extra primary/alias
+ * pairs (the OFAC consolidated list) merge into the same entry set; alias
+ * rows resolve against every primary loaded so far. */
+export function buildSdnList(sdnCsv: string, altCsv: string | null, version: string, extra: { prim: string; alt: string | null }[] = []): SdnList {
   const entries: SdnEntry[] = [];
   const primary = new Map<string, { name: string; type: string; programs: string[] }>();
-  // sdn.csv: ent_num, SDN_Name, SDN_Type, Program, Title, Call_Sign, Vess_type, Tonnage, GRT, Vess_flag, Vess_owner, Remarks
-  for (const row of parseCsv(sdnCsv)) {
-    const id = nullable(row[0]);
-    const name = nullable(row[1]);
-    if (!id || !name) continue;
-    const type = nullable(row[2]) ?? "entity";
-    const programs = (nullable(row[3]) ?? "").split(/\]\s*\[/).map((p) => p.replace(/[[\]]/g, "").trim()).filter(Boolean);
-    primary.set(id, { name, type, programs });
-    entries.push({ entryId: id, name, primaryName: name, type, programs, tokens: normalizeName(name) });
+  // *.csv: ent_num, Name, Type, Program, ... (same layout for SDN.CSV and CONS_PRIM.CSV)
+  for (const prim of [sdnCsv, ...extra.map((e) => e.prim)]) {
+    for (const row of parseCsv(prim)) {
+      const id = nullable(row[0]);
+      const name = nullable(row[1]);
+      if (!id || !name) continue;
+      const type = nullable(row[2]) ?? "entity";
+      const programs = (nullable(row[3]) ?? "").split(/\]\s*\[/).map((p) => p.replace(/[[\]]/g, "").trim()).filter(Boolean);
+      primary.set(id, { name, type, programs });
+      entries.push({ entryId: id, name, primaryName: name, type, programs, tokens: normalizeName(name) });
+    }
   }
-  // alt.csv: ent_num, alt_num, alt_type, alt_name, alt_remarks
-  if (altCsv) {
-    for (const row of parseCsv(altCsv)) {
+  // alt.csv / cons_alt.csv: ent_num, alt_num, alt_type, alt_name, alt_remarks
+  for (const alt of [altCsv, ...extra.map((e) => e.alt)]) {
+    if (!alt) continue;
+    for (const row of parseCsv(alt)) {
       const id = nullable(row[0]);
       const name = nullable(row[3]);
       const p = id ? primary.get(id) : undefined;
@@ -207,16 +239,23 @@ export function buildSdnList(sdnCsv: string, altCsv: string | null, version: str
   return { version, entries: entries.filter((e) => e.tokens.length > 0) };
 }
 
-/** Load the committed snapshot (data/sdn.csv + data/alt.csv + data/sdn.meta.json). */
+/** Load the committed snapshot (data/sdn.csv + data/alt.csv + data/sdn.meta.json,
+ *  plus the consolidated non-SDN lists when scripts/sdn-update.ts fetched them). */
 export async function loadSdnList(dir = fileURLToPath(new URL("../../data/", import.meta.url))): Promise<SdnList> {
   const altFile = Bun.file(`${dir}alt.csv`);
+  const consPrimFile = Bun.file(`${dir}cons_prim.csv`);
+  const consAltFile = Bun.file(`${dir}cons_alt.csv`);
   const metaFile = Bun.file(`${dir}sdn.meta.json`);
-  const [sdn, alt, meta] = await Promise.all([
+  const [sdn, alt, consPrim, consAlt, meta] = await Promise.all([
     Bun.file(`${dir}sdn.csv`).text(),
     (await altFile.exists()) ? altFile.text() : null,
+    (await consPrimFile.exists()) ? consPrimFile.text() : null,
+    (await consAltFile.exists()) ? consAltFile.text() : null,
     (await metaFile.exists()) ? (metaFile.json() as Promise<{ version?: string }>) : ({} as { version?: string }),
   ]);
-  return buildSdnList(sdn, alt, meta.version ?? "OFAC SDN (unversioned snapshot)");
+  const extra = consPrim ? [{ prim: consPrim, alt: consAlt }] : [];
+  const version = (meta.version ?? "OFAC SDN (unversioned snapshot)") + (consPrim ? " + Consolidated" : "");
+  return buildSdnList(sdn, alt, version, extra);
 }
 
 // ---- Screening -------------------------------------------------------------------------
@@ -230,14 +269,15 @@ export function screenName(
   let best: SdnEntry | null = null;
   let bestScore = 0;
   for (const e of list.entries) {
-    const s = nameScore(query, e.tokens);
+    // Compare on the rounded score so float noise doesn't defeat the tie-break.
+    const s = Math.round(nameScore(query, e.tokens) * 10000) / 10000;
     // Ties → lowest entry id, so the result is deterministic.
     if (s > bestScore || (s === bestScore && best !== null && s > 0 && Number(e.entryId) < Number(best.entryId))) {
       best = e;
       bestScore = s;
     }
   }
-  const score = Math.round(bestScore * 10000) / 10000;
+  const score = bestScore;
   if (!best || score < thresholds.possible) return { status: "clear", listVersion: list.version };
   const match = best.name === best.primaryName ? best.name : `${best.name} (a.k.a. of ${best.primaryName})`;
   return {
