@@ -24,6 +24,8 @@ import {
   type Policy,
   type Reroute,
   type ApproveRequest,
+  type BankVerificationRequest,
+  type PayoutChecks,
   type ReplayResult,
   type SanctionsReviewRequest,
   type ScreeningReviewRequest,
@@ -53,11 +55,12 @@ import {
 import { currentPrincipal, db, schema } from "../db";
 import { ApiError, notFound } from "../http-error";
 import { appendAudit } from "./audit-log";
+import { bankDetailsFor, normalizeTaxId } from "./vendors";
 import { getDemoAsOf, getSettings, planOptions, setDemoAsOf } from "./settings";
-import type { Settings, SettingsPatch, SettingsUpdate } from "../contracts";
+import { Settings, type SettingsPatch, type SettingsUpdate } from "../contracts";
 import type { DbOrTx, Tx } from "./tx";
 
-const { payouts, plans, screenings, sanctionsReviews, securityHolds, approvals, payments, reconciliations, journalEntries, journalLines, users } = schema;
+const { payouts, plans, screenings, sanctionsReviews, securityHolds, approvals, payments, reconciliations, journalEntries, journalLines, users, vendors } = schema;
 
 /** Statuses the engine may still change. Anything later is a human decision. */
 const REPLANNABLE: PayoutStatus[] = ["draft", "needs_info", "blocked", "awaiting_second_approver", "ready"];
@@ -137,13 +140,20 @@ function toMemo(memos: FullPayout["plans"][number]["memos"]): Memo | null {
     : null;
 }
 
-function toDetail(p: FullPayout): PayoutDetail {
+async function toDetail(q: DbOrTx, p: FullPayout): Promise<PayoutDetail> {
   const planRow = p.plans[0] ?? null;
   const pay = p.payments.find((x) => x.status !== "failed");
   const entry = p.journalEntries[0];
   const review = p.sanctionsReviews[0];
   const hold = p.securityHolds[0];
+  // U1: honest check status — only report checks that actually ran.
+  const checks: PayoutChecks = {
+    injectionScan: hold ? "flagged" : p.invoice!.source === "upload" ? "passed" : "not_run",
+    bankDetails: planRow?.plan.bankDetails?.status ?? (await bankDetailsFor(q, rowToInvoice(p.invoice!))).status,
+    duplicatePdf: p.invoice!.source === "upload" && p.invoice!.pdfSha256 !== null ? "passed" : "not_run",
+  };
   return {
+    checks,
     ...toSummary(p),
     invoice: rowToInvoice(p.invoice!),
     plan: planRow?.plan ?? null,
@@ -178,7 +188,13 @@ function toDetail(p: FullPayout): PayoutDetail {
       : null,
     approvals: p.approvals
       .filter((a) => a.decision === "approved")
-      .map((a) => ({ approver: a.approver.name, approverId: a.approverId, role: a.role, at: a.createdAt.toISOString() })),
+      .map((a) => ({
+        approver: a.approver.name,
+        approverId: a.approverId,
+        role: a.role,
+        at: a.createdAt.toISOString(),
+        ...(a.acknowledgedWarnings.length > 0 ? { acknowledgedWarnings: a.acknowledgedWarnings } : {}),
+      })),
     ...(pay
       ? { payment: { txHash: pay.txHash, offrampRef: pay.offrampRef, railRef: pay.railRef ?? "", railMode: pay.railMode } }
       : {}),
@@ -228,7 +244,7 @@ export async function listPayoutDetails(q: DbOrTx = db): Promise<PayoutDetail[]>
       securityHolds: { orderBy: [desc(securityHolds.createdAt)], limit: 1, with: { reviewer: true } },
     },
   });
-  return rows.map((r) => toDetail(r as FullPayout));
+  return Promise.all(rows.map((r) => toDetail(q, r as FullPayout)));
 }
 
 /** Everything the engine needs for one payout, read once. */
@@ -251,7 +267,7 @@ async function planContext(id: string) {
           ...(r.match ? { match: r.match } : {}),
           ...(r.score !== undefined ? { score: r.score } : {}),
         }));
-  return { invoice, screening, sanctions: await sanctionsReviewFor(db, id, invoice), settings: await getSettings(db) };
+  return { invoice, screening, sanctions: await sanctionsReviewFor(db, id, invoice), bankDetails: await bankDetailsFor(db, invoice), settings: await getSettings(db) };
 }
 
 /**
@@ -259,7 +275,8 @@ async function planContext(id: string) {
  * payee as named and the bank details as reviewed: if either changed since,
  * it no longer applies and the policy hold is back in force.
  */
-async function sanctionsReviewFor(q: DbOrTx, payoutId: string, invoice: Invoice): Promise<SanctionsInput | null> {
+/** The latest sanctions review row, only when it still applies to the invoice as it stands. */
+async function sanctionsReviewRow(q: DbOrTx, payoutId: string, invoice: Invoice): Promise<(typeof sanctionsReviews.$inferSelect & { reviewer: typeof users.$inferSelect }) | null> {
   const row = await q.query.sanctionsReviews.findFirst({
     where: eq(sanctionsReviews.payoutId, payoutId),
     orderBy: [desc(sanctionsReviews.createdAt)],
@@ -267,6 +284,12 @@ async function sanctionsReviewFor(q: DbOrTx, payoutId: string, invoice: Invoice)
   });
   if (!row) return null;
   if (row.payeeName !== invoice.payeeName || (row.bankIdValue ?? null) !== (invoice.bankId?.value ?? null)) return null;
+  return row;
+}
+
+async function sanctionsReviewFor(q: DbOrTx, payoutId: string, invoice: Invoice): Promise<SanctionsInput | null> {
+  const row = await sanctionsReviewRow(q, payoutId, invoice);
+  if (!row) return null;
   return { decision: row.decision, licenseRef: row.licenseRef, by: row.reviewer.name };
 }
 
@@ -274,7 +297,7 @@ function enginePlan(id: string, ctx: Awaited<ReturnType<typeof planContext>>, as
   // `hypothetical` lets the radar ask "what if this registry update were approved?".
   const options = { ...planOptions(ctx.settings), registry: { ...ctx.settings.registry, ...hypothetical } };
   try {
-    return planPayout({ payoutId: id, invoice: ctx.invoice, asOf, screening: ctx.screening, sanctions: ctx.sanctions, policy: ctx.settings.policy, options });
+    return planPayout({ payoutId: id, invoice: ctx.invoice, asOf, screening: ctx.screening, sanctions: ctx.sanctions, bankDetails: ctx.bankDetails, policy: ctx.settings.policy, options });
   } catch (err) {
     if (err instanceof UnknownCurrencyError) throw new ApiError(422, "unsupported_currency", err.message);
     throw err;
@@ -309,7 +332,7 @@ export async function getPayout(id: string, q: DbOrTx = db): Promise<PayoutDetai
   if (!isUuid(id)) throw notFound();
   const row = await loadFull(q, id);
   if (!row?.invoice) throw notFound();
-  return toDetail(row);
+  return toDetail(q, row);
 }
 
 // ---- Locking and guards -----------------------------------------------------------
@@ -393,9 +416,10 @@ async function planAndStore(tx: Tx, payout: typeof payouts.$inferSelect, asOf: s
 
   const screening = await screeningFor(tx, payout.id, invoice, actorId);
   const sanctions = await sanctionsReviewFor(tx, payout.id, invoice);
+  const bankDetails = await bankDetailsFor(tx, invoice);
   let plan: Plan;
   try {
-    plan = planPayout({ payoutId: payout.id, invoice, asOf, screening, sanctions, policy: settings.policy, options: planOptions(settings) });
+    plan = planPayout({ payoutId: payout.id, invoice, asOf, screening, sanctions, bankDetails, policy: settings.policy, options: planOptions(settings) });
   } catch (err) {
     if (err instanceof UnknownCurrencyError) throw new ApiError(422, "unsupported_currency", err.message);
     throw err;
@@ -696,6 +720,40 @@ export async function approve(id: string, req: ApproveRequest): Promise<PayoutDe
       if (!decision.ok) throw new ApiError(409, decision.code, decision.message);
       if (planRow.plan.recommended === null) throw new ApiError(409, "no_route", "There is no compliant route to approve.");
 
+      const invoiceRow = await tx.query.invoices.findFirst({ where: eq(schema.invoices.id, payout.invoiceId) });
+      if (!invoiceRow) throw new Error(`payout ${id} has no invoice`);
+      const invoice = rowToInvoice(invoiceRow);
+
+      if (req.decision === "approved") {
+        // C6 segregation of duties: the person who cleared the sanctions
+        // checks can't also approve. Rejections are always allowed.
+        const latestScreening = await tx.query.screenings.findFirst({ where: eq(screenings.payoutId, id), orderBy: [desc(screenings.createdAt)] });
+        const clearedByApprover =
+          latestScreening !== undefined &&
+          latestScreening.payeeName === invoice.payeeName &&
+          latestScreening.reviewDecision === "cleared" &&
+          latestScreening.reviewedBy === approver.id;
+        const review = await sanctionsReviewRow(tx, id, invoice);
+        const releasedByApprover = review !== null && review.decision === "released" && review.reviewedBy === approver.id;
+        if (clearedByApprover || releasedByApprover) {
+          throw new ApiError(409, "reviewer_cannot_approve", "You cleared the sanctions check on this payout, so a different person must approve it.");
+        }
+        // P5: warnings on the recommended route must be explicitly acknowledged.
+        const recEval = planRow.plan.evaluations.find((e) => e.route.id === planRow.plan.recommended!.id);
+        const warnIds = recEval ? recEval.results.filter((r) => r.outcome === "warn").map((r) => r.ruleId) : [];
+        const unacknowledged = warnIds.filter((r) => !req.acknowledgedWarnings.includes(r));
+        if (unacknowledged.length > 0) {
+          throw new ApiError(409, "warnings_not_acknowledged", `Acknowledge these warnings before approving: ${unacknowledged.join(", ")}.`);
+        }
+        // P3 + C9, re-checked here rather than trusting the stored plan.
+        const bankIssue = validateInvoice(invoice).find((i) => i.field === "bankId");
+        if (bankIssue) throw new ApiError(409, "invalid_bank_id", `Bank identifier failed its check: ${bankIssue.message}`);
+        const bank = await bankDetailsFor(tx, invoice);
+        if (bank.status !== "verified") {
+          throw new ApiError(409, "bank_details_unverified", "The vendor's bank details aren't verified. Record a call-back verification before approving.");
+        }
+      }
+
       await tx.insert(approvals).values({
         payoutId: id,
         planId: planRow.id,
@@ -704,6 +762,7 @@ export async function approve(id: string, req: ApproveRequest): Promise<PayoutDe
         decision: req.decision,
         amountUsd,
         comment: req.comment ?? null,
+        acknowledgedWarnings: req.decision === "approved" ? req.acknowledgedWarnings : [],
       });
       await tx
         .update(payouts)
@@ -713,7 +772,7 @@ export async function approve(id: string, req: ApproveRequest): Promise<PayoutDe
         payoutId: id,
         actorId: approver.id,
         type: req.decision === "approved" ? "approved" : "rejected",
-        payload: { planId: planRow.id, role: decision.role, nextStatus: decision.nextStatus, amountUsd, comment: req.comment ?? null, by: approver.name },
+        payload: { planId: planRow.id, role: decision.role, nextStatus: decision.nextStatus, amountUsd, comment: req.comment ?? null, acknowledgedWarnings: req.decision === "approved" ? req.acknowledgedWarnings : [], by: approver.name },
       });
     });
   } catch (err) {
@@ -742,6 +801,7 @@ function mapUniqueViolation(err: unknown): unknown {
  * safe on real rails because the payout id is the idempotency key.
  */
 export async function pay(id: string, by?: string): Promise<PayoutDetail> {
+  let recheckFailure: string | null = null;
   try {
     await db.transaction(async (tx) => {
       const payout = await lock(tx, id);
@@ -757,6 +817,95 @@ export async function pay(id: string, by?: string): Promise<PayoutDetail> {
       if (!invoiceRow) throw new Error(`payout ${id} has no invoice`);
       const payee = rowToInvoice(invoiceRow);
       const amountUsd = payout.amountUsd ?? route.amountUsd;
+
+      // C8: re-check before money moves — rules, screening and bank details as
+      // they stand on the demo clock's date, not when approval happened.
+      const settings = await getSettings(tx);
+      const asOf = settings.asOf;
+      const fresh = await screenPayee(payee.payeeName);
+      const latestScreening = await tx.query.screenings.findFirst({ where: eq(screenings.payoutId, id), orderBy: [desc(screenings.createdAt)] });
+      const sameName = latestScreening?.payeeName === payee.payeeName;
+      const screeningOk =
+        fresh.status === "clear" ||
+        (sameName && latestScreening!.reviewDecision === "cleared" && latestScreening!.matchedEntryId === fresh.matchedEntryId);
+      const recheck = planPayout({
+        payoutId: id,
+        invoice: payee,
+        asOf,
+        screening: {
+          status: fresh.status,
+          ...(fresh.match ? { match: fresh.match } : {}),
+          ...(fresh.score !== undefined ? { score: fresh.score } : {}),
+          reviewDecision: sameName ? latestScreening!.reviewDecision : null,
+        },
+        sanctions: await sanctionsReviewFor(tx, id, payee),
+        bankDetails: await bankDetailsFor(tx, payee),
+        policy: settings.policy,
+        options: planOptions(settings),
+      });
+      const existingApprovals = await tx.select().from(approvals).where(eq(approvals.payoutId, id)).orderBy(asc(approvals.createdAt));
+      const reasons: string[] = [];
+      const freshEval = recheck.evaluations.find((e) => e.route.id === route.id);
+      if (freshEval === undefined || !freshEval.compliant) reasons.push(`route ${route.id} is no longer compliant on ${asOf}`);
+      if (recheck.status === "blocked" || recheck.status === "needs_info") reasons.push(`the plan re-check gives status "${recheck.status}"`);
+      if (!screeningOk) reasons.push("the payee no longer passes sanctions screening");
+      const acknowledged = new Set(existingApprovals.flatMap((a) => a.acknowledgedWarnings));
+      const newWarnings = freshEval === undefined ? [] : freshEval.results.filter((r) => r.outcome === "warn" && !acknowledged.has(r.ruleId)).map((r) => r.ruleId);
+      if (newWarnings.length > 0) reasons.push(`new warnings need a fresh acknowledgment: ${newWarnings.join(", ")}`);
+
+      if (reasons.length > 0) {
+        // Approvals were given against a different picture: void them (the
+        // audit event is the record) and leave the payout re-plannable.
+        const screeningDiffers =
+          latestScreening === undefined ||
+          latestScreening.payeeName !== payee.payeeName ||
+          latestScreening.status !== fresh.status ||
+          (latestScreening.matchedName ?? null) !== (fresh.match ?? null) ||
+          (latestScreening.matchedEntryId ?? null) !== (fresh.matchedEntryId ?? null) ||
+          (latestScreening.score ?? null) !== (fresh.score ?? null);
+        if (screeningDiffers) {
+          await tx.insert(screenings).values({
+            payoutId: id,
+            payeeName: payee.payeeName,
+            status: fresh.status,
+            matchedName: fresh.match ?? null,
+            matchedEntryId: fresh.matchedEntryId ?? null,
+            score: fresh.score ?? null,
+            listVersion: fresh.listVersion,
+          });
+          await appendAudit(tx, {
+            payoutId: id,
+            actorId: actor?.id ?? null,
+            type: "screened",
+            payload: { status: fresh.status, listVersion: fresh.listVersion, ...(fresh.match ? { match: fresh.match, score: fresh.score } : {}), recheck: true },
+          });
+        }
+        await appendAudit(tx, {
+          payoutId: id,
+          actorId: actor?.id ?? null,
+          type: "approval_voided",
+          payload: {
+            reasons,
+            asOf,
+            routeId: route.id,
+            approvals: existingApprovals.map((a) => ({ approverId: a.approverId, role: a.role, planId: a.planId, amountUsd: a.amountUsd, at: a.createdAt.toISOString() })),
+          },
+        });
+        await tx.delete(approvals).where(eq(approvals.payoutId, id));
+        await tx.update(payouts).set({ approvedAt: null }).where(eq(payouts.id, id));
+        await planAndStore(tx, payout, asOf, settings, actor?.id ?? null);
+        recheckFailure = `The pay re-check failed: ${reasons.join("; ")}. Approvals were voided; review and approve again.`;
+        return;
+      }
+
+      // The daily cap also guards payments actually sent today (UTC), not just approvals.
+      const [{ sentToday }] = await tx
+        .select({ sentToday: sql<string | null>`sum(${payments.amountUsd})` })
+        .from(payments)
+        .where(and(ne(payments.status, "failed"), gte(payments.createdAt, startOfUtcDay())));
+      if (Number(sentToday ?? 0) + amountUsd > settings.policy.dailyCapUsd) {
+        throw new ApiError(409, "daily_cap_exceeded", `Paying USD ${amountUsd} would bring today's payments over the USD ${settings.policy.dailyCapUsd} daily cap.`);
+      }
 
       let sent;
       let mode;
@@ -809,6 +958,78 @@ export async function pay(id: string, by?: string): Promise<PayoutDetail> {
   } catch (err) {
     throw mapUniqueViolation(err);
   }
+  if (recheckFailure) throw new ApiError(409, "pay_recheck_failed", recheckFailure);
+  return getPayout(id);
+}
+
+// ---- Vendor bank-detail call-back verification (C9) -----------------------------------
+
+/**
+ * POST /api/payouts/:id/bank-verification. The reviewer (controller/approver)
+ * records that they called the vendor back on a number from their own records
+ * and confirmed the bank details. The person who last changed the bank details
+ * can't also vouch for them. The audit event carries no bank or tax values.
+ */
+export async function verifyBankDetails(id: string, req: BankVerificationRequest, reviewerRef: string): Promise<PayoutDetail> {
+  await db.transaction(async (tx) => {
+    const payout = await lock(tx, id);
+    await assertReplannable(tx, payout, "verified");
+    const reviewer = await resolveUser(tx, reviewerRef, APPROVER_ROLES, "verify bank details");
+    const invoiceRow = await tx.query.invoices.findFirst({ where: eq(schema.invoices.id, payout.invoiceId) });
+    if (!invoiceRow) throw new Error(`payout ${id} has no invoice`);
+    const invoice = rowToInvoice(invoiceRow);
+    const bankOk = invoice.bankId !== null && !validateInvoice(invoice).some((i) => i.field === "bankId");
+    if (!bankOk || invoice.payeeTaxId === null) {
+      throw new ApiError(409, "cannot_verify", "The invoice needs a valid bank identifier and a tax id before its bank details can be verified.");
+    }
+
+    // The person who last changed the bank details can't also vouch for them.
+    const edits = await tx
+      .select({ actorId: schema.auditEvents.actorId, payload: schema.auditEvents.payload })
+      .from(schema.auditEvents)
+      .where(and(eq(schema.auditEvents.payoutId, id), eq(schema.auditEvents.type, "edited")))
+      .orderBy(desc(schema.auditEvents.seq));
+    const lastBankEdit = edits.find((e) => Array.isArray(e.payload.fields) && (e.payload.fields as unknown[]).includes("bankId"));
+    if (lastBankEdit?.actorId === reviewer.id) {
+      throw new ApiError(409, "same_person", "You changed the bank details on this invoice, so a different person must verify them.");
+    }
+
+    const previous = await bankDetailsFor(tx, invoice);
+    const [vendor] = await tx
+      .insert(vendors)
+      .values({
+        country: invoice.payeeCountry,
+        taxId: normalizeTaxId(invoice.payeeTaxId),
+        name: invoice.payeeName,
+        bankIdType: invoice.bankId!.type,
+        bankIdValue: invoice.bankId!.value,
+        verifiedBy: reviewer.id,
+        verifiedAt: new Date(),
+        verificationNote: req.note,
+        source: "callback",
+      })
+      .onConflictDoUpdate({
+        target: [vendors.country, vendors.taxId],
+        set: {
+          name: invoice.payeeName,
+          bankIdType: invoice.bankId!.type,
+          bankIdValue: invoice.bankId!.value,
+          verifiedBy: reviewer.id,
+          verifiedAt: new Date(),
+          verificationNote: req.note,
+          source: "callback",
+        },
+      })
+      .returning({ id: vendors.id });
+    await appendAudit(tx, {
+      payoutId: id,
+      actorId: reviewer.id,
+      type: "bank_verified",
+      payload: { vendorId: vendor!.id, bankIdType: invoice.bankId!.type, previous: previous.status, by: reviewer.name, note: req.note },
+    });
+    const settings = await getSettings(tx);
+    await planAndStore(tx, payout, payout.asOf ?? settings.asOf, settings, reviewer.id);
+  });
   return getPayout(id);
 }
 
@@ -912,6 +1133,26 @@ export async function reconcilePayout(id: string, by?: string): Promise<PayoutDe
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
+ * Hard ceilings on the policy a workspace may set (C4). Looser than this and
+ * the request is refused outright — overridable per deployment via env.
+ */
+function assertPolicyCeilings(policy: Policy): void {
+  const maxDaily = Number(process.env.POLICY_MAX_DAILY_CAP_USD ?? 1_000_000);
+  const maxSecond = Number(process.env.POLICY_MAX_SECOND_APPROVER_USD ?? 100_000);
+  if (policy.dailyCapUsd > maxDaily || policy.secondApproverAboveUsd > maxSecond) {
+    throw new ApiError(
+      422,
+      "policy_above_ceiling",
+      `Policy exceeds the hard ceilings: daily cap at most USD ${maxDaily}, second-approver threshold at most USD ${maxSecond}.`,
+    );
+  }
+}
+
+/** A patch that raises either limit is "loosening" — even if the other drops. */
+const loosensPolicy = (next: Policy, current: Policy): boolean =>
+  next.secondApproverAboveUsd > current.secondApproverAboveUsd || next.dailyCapUsd > current.dailyCapUsd;
+
+/**
  * PUT /api/settings. Each field that actually changes is stored and written to
  * the audit log (one `settings_changed` event per setting), then every open
  * payout is re-planned so statuses and routes follow ("ready" becomes
@@ -919,18 +1160,22 @@ const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
  * disabled provider loses its routes, an approved registry update can lift a
  * block). Payouts that already have an approval are frozen and keep their plan.
  * The reroutes the change caused come back so the UI can say why.
+ *
+ * C4 two-person rule: a policy change that LOOSENS a limit is not applied; it
+ * is stored as `pending_policy` (audited `settings_change_requested`) until a
+ * different person confirms it via POST /api/settings/pending-policy/confirm.
  */
 export async function updateSettings(patch: SettingsPatch): Promise<SettingsUpdate> {
   const known = new Set(reference().offramps.map((o) => o.id));
   for (const id of [...(patch.disabledOfframps ?? []), ...Object.keys(patch.registry ?? {})]) {
     if (!known.has(id)) throw new ApiError(400, "unknown_offramp", `No off-ramp "${id}" in the registry.`);
   }
+  if (patch.policy) assertPolicyCeilings(patch.policy);
 
   const changed = await db.transaction(async (tx) => {
     const actor = patch.by ? await resolveUser(tx, patch.by, APPROVER_ROLES, "change settings") : null;
     const current = await getSettings(tx);
     const changes: { key: string; setting: string; from: unknown; to: unknown }[] = [];
-    if (patch.policy && !sameJson(patch.policy, current.policy)) changes.push({ key: "policy", setting: "policy", from: current.policy, to: patch.policy });
     if (patch.objective && patch.objective !== current.objective) changes.push({ key: "objective", setting: "objective", from: current.objective, to: patch.objective });
     if (patch.disabledOfframps) {
       const next = [...new Set(patch.disabledOfframps)].sort();
@@ -945,8 +1190,94 @@ export async function updateSettings(patch: SettingsPatch): Promise<SettingsUpda
         .onConflictDoUpdate({ target: schema.settings.key, set: { value: c.to } });
       await appendAudit(tx, { payoutId: null, actorId: actor?.id ?? null, type: "settings_changed", payload: { setting: c.setting, from: c.from, to: c.to, ...(actor ? { by: actor.name } : {}) } });
     }
+
+    if (patch.policy && !sameJson(patch.policy, current.policy)) {
+      if (loosensPolicy(patch.policy, current.policy)) {
+        if (!actor) throw new ApiError(401, "unauthorized", "Sign in to request a policy change.");
+        const pending = { policy: patch.policy, requestedById: actor.id, requestedBy: actor.name, requestedAt: new Date().toISOString() };
+        await tx
+          .insert(schema.settings)
+          .values({ key: "pending_policy", value: pending })
+          .onConflictDoUpdate({ target: schema.settings.key, set: { value: pending } });
+        await appendAudit(tx, {
+          payoutId: null,
+          actorId: actor.id,
+          type: "settings_change_requested",
+          payload: { setting: "policy", from: current.policy, to: patch.policy, by: actor.name },
+        });
+      } else {
+        await tx
+          .insert(schema.settings)
+          .values({ key: "policy", value: patch.policy })
+          .onConflictDoUpdate({ target: schema.settings.key, set: { value: patch.policy } });
+        await appendAudit(tx, {
+          payoutId: null,
+          actorId: actor?.id ?? null,
+          type: "settings_changed",
+          payload: { setting: "policy", from: current.policy, to: patch.policy, ...(actor ? { by: actor.name } : {}) },
+        });
+        changes.push({ key: "policy", setting: "policy", from: current.policy, to: patch.policy });
+      }
+    }
     return changes.length > 0;
   });
   const reroutes = changed ? (await planAll(await getDemoAsOf(db))).reroutes : [];
   return { ...(await getSettings(db)), reroutes };
+}
+
+const PENDING_POLICY = Settings.shape.pendingPolicy;
+type PendingPolicy = NonNullable<Settings["pendingPolicy"]>;
+
+async function readPendingPolicy(tx: DbOrTx): Promise<PendingPolicy | null> {
+  const row = await tx.query.settings.findFirst({ where: eq(schema.settings.key, "pending_policy") });
+  const parsed = PENDING_POLICY.safeParse(row?.value ?? null);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * POST /api/settings/pending-policy/confirm. A second person (controller or
+ * approver, not the requester) applies the pending loosening: the ceilings are
+ * re-checked, the policy is stored and audited, and open payouts are re-planned.
+ */
+export async function confirmPendingPolicy(by: string): Promise<SettingsUpdate> {
+  await db.transaction(async (tx) => {
+    const actor = await resolveUser(tx, by, APPROVER_ROLES, "confirm a policy change");
+    const pending = await readPendingPolicy(tx);
+    if (pending === null) throw new ApiError(409, "no_pending_policy", "There is no policy change waiting for confirmation.");
+    if (pending.requestedById === actor.id) {
+      throw new ApiError(409, "same_person", "The person who requested this policy change can't confirm it.");
+    }
+    assertPolicyCeilings(pending.policy);
+    const current = await getSettings(tx);
+    await tx
+      .insert(schema.settings)
+      .values({ key: "policy", value: pending.policy })
+      .onConflictDoUpdate({ target: schema.settings.key, set: { value: pending.policy } });
+    await tx.delete(schema.settings).where(eq(schema.settings.key, "pending_policy"));
+    await appendAudit(tx, {
+      payoutId: null,
+      actorId: actor.id,
+      type: "settings_changed",
+      payload: { setting: "policy", from: current.policy, to: pending.policy, requestedBy: pending.requestedBy, by: actor.name },
+    });
+  });
+  const { reroutes } = await planAll(await getDemoAsOf(db));
+  return { ...(await getSettings(db)), reroutes };
+}
+
+/** DELETE /api/settings/pending-policy. A controller withdraws the request. */
+export async function cancelPendingPolicy(by: string): Promise<Settings> {
+  await db.transaction(async (tx) => {
+    const actor = await resolveUser(tx, by, ["controller"], "cancel a policy change");
+    const pending = await readPendingPolicy(tx);
+    if (pending === null) throw new ApiError(409, "no_pending_policy", "There is no pending policy change to cancel.");
+    await tx.delete(schema.settings).where(eq(schema.settings.key, "pending_policy"));
+    await appendAudit(tx, {
+      payoutId: null,
+      actorId: actor.id,
+      type: "settings_change_cancelled",
+      payload: { setting: "policy", to: pending.policy, requestedBy: pending.requestedBy, by: actor.name },
+    });
+  });
+  return getSettings(db);
 }

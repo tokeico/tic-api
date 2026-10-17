@@ -1,6 +1,6 @@
 // App settings from the `settings` table (policy, demo clock) plus the rail mode.
 import { eq } from "drizzle-orm";
-import { IsoDate, Objective, OfframpType, Policy, type Settings } from "../contracts";
+import { IsoDate, Objective, OfframpType, Policy, Settings } from "../contracts";
 import { z } from "zod";
 import type { PlanOptions } from "../corredor";
 import { DEFAULT_POLICY, parseRailMode } from "../corredor";
@@ -17,6 +17,7 @@ export async function getSettings(q: DbOrTx): Promise<Settings> {
   const objective = Objective.safeParse(byKey.get("objective"));
   const disabled = z.array(z.string()).safeParse(byKey.get("disabled_offramps"));
   const registry = z.record(z.string(), OfframpType).safeParse(byKey.get("registry"));
+  const pending = Settings.shape.pendingPolicy.safeParse(byKey.get("pending_policy") ?? null);
   return {
     asOf: asOf.success ? asOf.data : DEFAULT_AS_OF(),
     railMode: parseRailMode(process.env.RAIL_MODE),
@@ -24,6 +25,7 @@ export async function getSettings(q: DbOrTx): Promise<Settings> {
     objective: objective.success ? objective.data : "cheapest",
     disabledOfframps: disabled.success ? disabled.data : [],
     registry: registry.success ? registry.data : {},
+    pendingPolicy: pending.success ? pending.data : null,
   };
 }
 

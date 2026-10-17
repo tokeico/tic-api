@@ -11,7 +11,7 @@ import { isIsoDate, reference, rulesActiveOn, screenPayee } from "../corredor";
 import { adminDb, db } from "../db";
 import { requirePrincipal } from "../security/middleware";
 import { ApiError } from "../http-error";
-import { updateSettings } from "../services/payouts";
+import { cancelPendingPolicy, confirmPendingPolicy, updateSettings } from "../services/payouts";
 import { getDemoAsOf, getSettings } from "../services/settings";
 
 export const referenceRoutes = new Hono();
@@ -47,6 +47,18 @@ referenceRoutes.put("/settings", async (c) => {
     throw new ApiError(400, "invalid_body", parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; "));
   }
   return c.json(await updateSettings({ ...parsed.data, by: principal.userId }));
+});
+
+/** POST /api/settings/pending-policy/confirm  A second person applies a pending loosening (C4). */
+referenceRoutes.post("/settings/pending-policy/confirm", async (c) => {
+  const principal = requirePrincipal();
+  return c.json(await confirmPendingPolicy(principal.userId));
+});
+
+/** DELETE /api/settings/pending-policy  A controller withdraws the pending loosening (C4). */
+referenceRoutes.delete("/settings/pending-policy", async (c) => {
+  const principal = requirePrincipal();
+  return c.json(await cancelPendingPolicy(principal.userId));
 });
 
 /** GET /api/health  Pre-demo checklist: database up, local model reachable and pulled. */
