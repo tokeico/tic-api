@@ -21,6 +21,7 @@ for (const suite of suites) {
     env: {
       ...process.env, DATABASE_URL: target, RAIL_MODE: "mock",
       TEST_DATABASE_URL: suite === "workflow" ? target : "",
+      DEMO_HISTORY: suite === "workflow" ? "off" : "on",
       TEST_AUTH_DATABASE_URL: suite === "auth" ? target : "",
     },
     stdout: "inherit", stderr: "inherit",

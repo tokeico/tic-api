@@ -50,5 +50,6 @@ export async function seedWorkspace(tx: Transaction, schemaName: string, owner: 
     { key: "demo_as_of", value: process.env.DEMO_DEFAULT_AS_OF ?? "2026-10-17" },
     { key: "rules_version", value: "v1" },
   ]);
-  await seedHistory(tx);
+  // DEMO_HISTORY=off keeps a new workspace to the four PRD invoices (the workflow tests).
+  if (process.env.DEMO_HISTORY !== "off") await seedHistory(tx);
 }
