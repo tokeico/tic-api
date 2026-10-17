@@ -6,6 +6,7 @@
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { SettingsPatch } from "../contracts";
+import { getProvider } from "../llm/provider";
 import { isIsoDate, reference, rulesActiveOn, screenPayee } from "../corredor";
 import { db } from "../db";
 import { ApiError } from "../http-error";
@@ -45,22 +46,15 @@ referenceRoutes.put("/settings", async (c) => {
   return c.json(await updateSettings(parsed.data));
 });
 
-/** GET /api/health  Pre-demo checklist: database up, local model reachable. */
+/** GET /api/health  Pre-demo checklist: database up, local model reachable and pulled. */
 referenceRoutes.get("/health", async (c) => {
   let dbOk = false;
   try {
     await db.execute(sql`select 1`);
     dbOk = true;
   } catch {}
-  const model = process.env.LLM_MODEL ?? null;
-  let ollama = false;
-  const url = process.env.OLLAMA_URL;
-  if (url) {
-    try {
-      ollama = (await fetch(`${url.replace(/\/$/, "")}/api/tags`, { signal: AbortSignal.timeout(800) })).ok;
-    } catch {}
-  }
-  return c.json({ db: dbOk, ollama, model: ollama ? model : null });
+  const llm = getProvider();
+  return c.json({ db: dbOk, llm: await llm.available(), model: llm.model });
 });
 
 /** GET /api/offramps  The provider registry with approved updates applied and each provider's on/off switch. */

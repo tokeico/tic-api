@@ -394,9 +394,60 @@ export type SettingsPatch = z.infer<typeof SettingsPatch>;
 export const SettingsUpdate = Settings.extend({ reroutes: z.array(Reroute) });
 export type SettingsUpdate = z.infer<typeof SettingsUpdate>;
 
+// ---- Agent (local LLM) ---------------------------------------------------------
+
+/** One turn of the conversation, as the UI keeps it. */
+export const AgentTurn = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().max(8000),
+});
+export type AgentTurn = z.infer<typeof AgentTurn>;
+
+/** POST /api/agent/chat */
+export const AgentChatRequest = z.object({
+  messages: z.array(AgentTurn).min(1).max(40), // last one is the user's question
+  asOf: IsoDate.optional(), // the UI's as-of date (defaults to the demo date)
+});
+export type AgentChatRequest = z.infer<typeof AgentChatRequest>;
+
+export const AgentActionKind = z.enum(["approve", "pay", "reconcile", "email", "asof"]);
+export type AgentActionKind = z.infer<typeof AgentActionKind>;
+
+/** Something the agent prepared for a person to confirm. It never runs on its own. */
+export const AgentProposal = z.object({
+  kind: AgentActionKind,
+  payoutId: z.string().nullable(),
+  risk: z.enum(["High", "Medium", "Low"]),
+  title: z.string(),
+  why: z.string(),
+  cites: z.array(z.string()),
+  body: z.string().optional(), // email draft
+  asOf: IsoDate.optional(), // for kind "asof"
+});
+export type AgentProposal = z.infer<typeof AgentProposal>;
+
+export const AgentReply = z.object({
+  text: z.string(),
+  tools: z.array(z.string()), // the tool calls it made, e.g. get_payout("Estúdio Paulista")
+  cites: z.array(z.string()), // rule ids it cited that exist in the pack
+  removedCites: z.array(z.string()), // ids it made up: removed by the citation guard
+  actions: z.array(AgentProposal),
+  model: z.string(),
+  ms: z.number(),
+});
+export type AgentReply = z.infer<typeof AgentReply>;
+
+/** GET /api/agent/status */
+export const AgentStatus = z.object({
+  available: z.boolean(), // Ollama is running and the model is pulled
+  model: z.string(),
+  provider: z.string(),
+});
+export type AgentStatus = z.infer<typeof AgentStatus>;
+
 export const Health = z.object({
   db: z.boolean(),
-  ollama: z.boolean(),
+  llm: z.boolean(), // the local model is reachable and pulled
   model: z.string().nullable(),
 });
 export type Health = z.infer<typeof Health>;

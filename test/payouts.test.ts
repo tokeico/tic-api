@@ -382,6 +382,71 @@ suite("payouts API (Postgres)", () => {
     expect(edited!.payload.by).toBe("Sam Ortiz");
   });
 
+  test("agent: tool loop, masking, checked proposals and the citation guard (fake model)", async () => {
+    const { askAgent, resolvePayout, maskDigits } = await import("../src/llm/agent");
+    const calls: string[][] = [];
+    // A scripted "model": round 1 looks things up and proposes, round 2 answers.
+    const script = [
+      {
+        content: "",
+        toolCalls: [
+          { id: "t1", name: "get_payout", args: { payout: "Autopartes" } },
+          { id: "t2", name: "propose_action", args: { kind: "pay", payout: "VE", title: "Pay Orinoco", why: "x" } }, // blocked payout: refused
+          { id: "t3", name: "propose_action", args: { kind: "email", payout: "MX", title: "Email Autopartes", why: "Confirm the CLABE", email_body: "Subject: hi\nIs 012580001234567897 right?" } },
+        ],
+      },
+      { content: "MX is fine under MX-BANK-CRYPTO and BR-FAKE-RULE. Account 012580001234567897.", toolCalls: [] },
+    ];
+    let round = 0;
+    const fake = {
+      name: "fake",
+      model: "fake-1",
+      available: async () => true,
+      async chat(_system: string, messages: { role: string; content: string }[]) {
+        calls.push(messages.filter((m) => m.role === "tool").map((m) => m.content));
+        return script[round++]!;
+      },
+    };
+    const reply = await askAgent({ turns: [{ role: "user", content: "What about Mexico?" }], provider: fake as never });
+
+    // Tool results went back to the model, with identifiers masked.
+    const toolOut = calls[1]!;
+    expect(toolOut[0]).toContain("Autopartes del Norte");
+    expect(toolOut[0]).not.toContain("012580001234567897");
+    expect(toolOut[0]).toContain("ending 7897");
+    expect(toolOut[1]).toMatch(/^Error: Can't propose pay/); // proposals are checked against real status
+    expect(toolOut[2]).toContain("Queued for a person");
+
+    expect(reply.actions).toHaveLength(1);
+    expect(reply.actions[0]).toMatchObject({ kind: "email", risk: "Medium", payoutId: ids.mx });
+    expect(reply.actions[0]!.body).not.toContain("012580001234567897");
+    expect(reply.tools).toEqual(['get_payout("Autopartes")', 'propose_action("VE", "pay")', 'propose_action("MX", "email")']);
+    expect(reply.cites).toEqual(["MX-BANK-CRYPTO"]);
+    expect(reply.removedCites).toEqual(["BR-FAKE-RULE"]);
+    expect(reply.text).toContain("BR-FAKE-RULE [not in the rules pack]");
+    expect(reply.text).not.toContain("012580001234567897");
+    expect(reply.model).toBe("fake-1");
+
+    const all = (await get("/api/payouts?detail=1")).json as unknown as Json[];
+    expect(resolvePayout("lucia", all as never)?.country).toBe("AR"); // accents and case don't matter
+    expect(maskDigits("CVU 0000003110000123456781")).toBe("CVU ••••6781");
+    expect(maskDigits("as of 2026-10-17")).toBe("as of 2026-10-17"); // dates are not accounts
+  });
+
+  test("agent endpoint: status, validation, and a clear 503 when the model isn't reachable", async () => {
+    const saved = process.env.OLLAMA_URL;
+    process.env.OLLAMA_URL = "http://127.0.0.1:9"; // nothing listens there
+    expect((await get("/api/agent/status")).json).toMatchObject({ available: false, provider: "ollama" });
+    expect((await get("/api/health")).json).toMatchObject({ db: true, llm: false });
+    expect((await post("/api/agent/chat", { messages: [] })).json.error.code).toBe("invalid_body");
+    expect((await post("/api/agent/chat", { messages: [{ role: "assistant", content: "hi" }] })).json.error.code).toBe("invalid_body");
+    const res = await post("/api/agent/chat", { messages: [{ role: "user", content: "hi" }] });
+    expect(res.status).toBe(503);
+    expect(res.json.error.code).toBe("llm_unavailable");
+    if (saved === undefined) delete process.env.OLLAMA_URL;
+    else process.env.OLLAMA_URL = saved;
+  });
+
   test("POST /api/demo/reset wipes back to four draft payouts and a clean chain", async () => {
     process.env.ALLOW_DEMO_RESET = "0";
     expect((await post("/api/demo/reset")).json.error.code).toBe("demo_reset_disabled");
