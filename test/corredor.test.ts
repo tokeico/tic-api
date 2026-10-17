@@ -38,7 +38,7 @@ describe("quote", () => {
   });
 
   test("route labels", () => {
-    const p = planPayout({ payoutId: "x", invoice: demoInvoice("br"), asOf: "2026-10-30", screening: { status: "clear" } });
+    const p = planPayout({ payoutId: "x", invoice: demoInvoice("br"), asOf: "2026-10-31", screening: { status: "clear" } });
     expect(routeLabel(p.recommended!)).toBe("USDC · Base · Sol VASP · 0.85%");
     expect(toPayoutSummary("x", demoInvoice("br"), p)).toEqual({
       id: "x", payeeName: "Estúdio Paulista Design Ltda", country: "BR", amountLocal: 85000, currency: "BRL",

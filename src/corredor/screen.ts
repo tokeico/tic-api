@@ -5,6 +5,7 @@
 // A possible_match or hit blocks the payout until a human reviews it (PRD 8.2).
 // Pure once the list is loaded; loading reads the committed snapshot in data/.
 
+import { fileURLToPath } from "node:url";
 import type { ScreeningStatus } from "../contracts";
 
 export interface SdnEntry {
@@ -207,7 +208,7 @@ export function buildSdnList(sdnCsv: string, altCsv: string | null, version: str
 }
 
 /** Load the committed snapshot (data/sdn.csv + data/alt.csv + data/sdn.meta.json). */
-export async function loadSdnList(dir = new URL("../../data/", import.meta.url).pathname): Promise<SdnList> {
+export async function loadSdnList(dir = fileURLToPath(new URL("../../data/", import.meta.url))): Promise<SdnList> {
   const altFile = Bun.file(`${dir}alt.csv`);
   const metaFile = Bun.file(`${dir}sdn.meta.json`);
   const [sdn, alt, meta] = await Promise.all([

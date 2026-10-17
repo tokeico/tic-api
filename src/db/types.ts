@@ -18,6 +18,7 @@ export type Network = (typeof NETWORKS)[number];
 export const OFFRAMP_TYPES = [
   "vasp_authorized",
   "vasp_pending",
+  "vasp_unfiled",
   "efx",
   "bank",
   "nonbank_licensed",

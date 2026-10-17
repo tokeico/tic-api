@@ -8,11 +8,12 @@
 //                            relative to the previous date in the demo order
 //                            (the first one is relative to the default date).
 
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { PayoutDetail, PlanAllResponse, type Plan } from "../src/contracts";
 import { DEMO_DATES, DEMO_INVOICES, demoInvoice, planPayout, replanAll, screenPayee, toPayoutSummary } from "../src/corredor";
 
-const outDir = (process.argv[2] ?? new URL("../../tic-web/src/fixtures/", import.meta.url).pathname).replace(/\/?$/, "/");
+const outDir = (process.argv[2] ?? fileURLToPath(new URL("../../tic-web/src/fixtures/", import.meta.url))).replace(/\/?$/, "/");
 const defaultAsOf = process.env.DEMO_DEFAULT_AS_OF ?? "2026-10-17";
 
 const items = await Promise.all(

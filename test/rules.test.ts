@@ -32,16 +32,16 @@ describe("golden: demo invoices across the slider dates", () => {
   });
 
   test("BR statuses and warnings per date", () => {
-    const [sep30, oct1, oct17, oct30] = DEMO_DATES.map((d) => planFor("br", d));
+    const [sep30, oct1, oct17, oct31] = DEMO_DATES.map((d) => planFor("br", d));
     expect(sep30!.status).toBe("ready");
     expect(warningCount(sep30!)).toBe(0);
     for (const p of [oct1!, oct17!]) {
       expect(p.status).toBe("ready");
-      expect(resultFor(p, "BR-VASP-PENDING-WARN")?.outcome).toBe("warn");
+      expect(resultFor(p, "BR-VASP-UNFILED-WARN")?.outcome).toBe("warn");
     }
-    expect(oct30!.status).toBe("ready");
-    expect(warningCount(oct30!)).toBe(0);
-    expect(oct30!.recommended?.id).toBe("BR:usdc-base:br-sol"); // Base preferred over Arbitrum at equal cost
+    expect(oct31!.status).toBe("ready");
+    expect(warningCount(oct31!)).toBe(0);
+    expect(oct31!.recommended?.id).toBe("BR:usdc-base:br-sol"); // Base preferred over Arbitrum at equal cost
   });
 
   test("BR on Oct 17: PagaFX blocked by BR-561-EFX, purpose code satisfied, USD amount", () => {
@@ -71,8 +71,8 @@ describe("golden: demo invoices across the slider dates", () => {
       expect(p.status).toBe("ready");
       const spread = resultFor(p, "AR-FX-SPREAD")!;
       expect(spread.outcome).toBe("warn");
-      expect(spread.message).toContain("1,350");
-      expect(spread.message).toContain("1,460");
+      expect(spread.message).toContain("1,518");
+      expect(spread.message).toContain("1,619");
       const cueva = p.evaluations.find((e) => e.route.offramp?.id === "ar-cueva")!;
       expect(cueva.compliant).toBe(false);
     }
@@ -106,12 +106,17 @@ describe("reroutes (slider toast)", () => {
     expect(r.reason).toContain("took effect");
   });
 
-  test("Oct 17 → Oct 30 names BR-VASP-AUTH", () => {
-    expect(diffPlans(br("2026-10-17"), br("2026-10-30"))).toMatchObject({ to: "BR:usdc-base:br-sol", ruleId: "BR-VASP-AUTH" });
+  test("Oct 30 is still a valid filing day: Ponte stays, with a warning", () => {
+    expect(diffPlans(br("2026-10-17"), br("2026-10-30"))).toBeNull();
+    expect(resultFor(br("2026-10-30"), "BR-VASP-UNFILED-WARN")?.outcome).toBe("warn");
+  });
+
+  test("Oct 17 → Oct 31 names BR-VASP-AUTH", () => {
+    expect(diffPlans(br("2026-10-17"), br("2026-10-31"))).toMatchObject({ to: "BR:usdc-base:br-sol", ruleId: "BR-VASP-AUTH" });
   });
 
   test("dragging back explains which rule isn't in effect yet", () => {
-    const r = diffPlans(br("2026-10-30"), br("2026-10-17"))!;
+    const r = diffPlans(br("2026-10-31"), br("2026-10-17"))!;
     expect(r).toMatchObject({ from: "BR:usdc-base:br-sol", to: "BR:usdc-base:br-ponte", ruleId: "BR-VASP-AUTH" });
     expect(r.reason).toContain("not in effect on 2026-10-17");
     expect(diffPlans(br("2026-10-01"), br("2026-09-30"))?.ruleId).toBe("BR-561-EFX");
@@ -181,10 +186,10 @@ describe("engine edge cases", () => {
 });
 
 describe("rules pack", () => {
-  test("v1 has the 9 sourced rules from the spec", () => {
+  test("the pack has the 11 rules verified against primary sources", () => {
     const ids = reference().rules.map((r) => r.id);
     expect(ids).toEqual([
-      "BR-521-FX", "BR-521-CAP", "BR-561-EFX", "BR-VASP-PENDING-WARN", "BR-VASP-AUTH",
+      "BR-521-FX", "BR-521-CAP", "BR-561-EFX", "BR-VASP-PENDING-WARN", "BR-VASP-UNFILED-WARN", "BR-VASP-AUTH", "BR-VASP-ART91",
       "MX-BANK-CRYPTO", "AR-PSAV", "AR-FX-SPREAD", "VE-OFAC",
     ]);
     for (const r of reference().rules) expect(r.source.url).toStartWith("https://");
@@ -194,9 +199,15 @@ describe("rules pack", () => {
     const ids = (d: string) => rulesActiveOn(d, "BR").map((r) => r.id);
     expect(ids("2026-09-30")).not.toContain("BR-561-EFX");
     expect(ids("2026-10-01")).toContain("BR-561-EFX");
-    expect(ids("2026-10-29")).toContain("BR-VASP-PENDING-WARN");
-    expect(ids("2026-10-30")).not.toContain("BR-VASP-PENDING-WARN");
-    expect(ids("2026-10-30")).toContain("BR-VASP-AUTH");
+    // Oct 30 is the deadline to FILE for authorization (Res. 520 art. 88 I; IN 704 art. 9), so a
+    // provider that never filed is blocked from Oct 31. Pending applicants may keep operating.
+    expect(ids("2026-10-30")).toContain("BR-VASP-UNFILED-WARN");
+    expect(ids("2026-10-30")).not.toContain("BR-VASP-AUTH");
+    expect(ids("2026-10-31")).not.toContain("BR-VASP-UNFILED-WARN");
+    expect(ids("2026-10-31")).toContain("BR-VASP-AUTH");
+    expect(ids("2027-06-01")).toContain("BR-VASP-PENDING-WARN");
+    expect(ids("2026-11-05")).not.toContain("BR-VASP-ART91");
+    expect(ids("2026-11-06")).toContain("BR-VASP-ART91");
   });
 
   test("bad rules fail at load time", () => {

@@ -29,6 +29,7 @@ export type Network = z.infer<typeof Network>;
 export const OfframpType = z.enum([
   "vasp_authorized",
   "vasp_pending",
+  "vasp_unfiled", // operating, but has not filed for BCB authorization (deadline 2026-10-30)
   "efx",
   "bank",
   "nonbank_licensed",

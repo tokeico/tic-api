@@ -3,7 +3,7 @@
   "offramps": [
     { "id": "br-pagafx", "name": "PagaFX", "country": "BR", "type": "efx", "feePct": 0.55,
       "assets": ["USDC"], "networks": ["base"], "rail": "pix", "minutes": 15 },
-    { "id": "br-ponte", "name": "Ponte Digital", "country": "BR", "type": "vasp_pending", "feePct": 0.70,
+    { "id": "br-ponte", "name": "Ponte Digital", "country": "BR", "type": "vasp_unfiled", "feePct": 0.70,
       "assets": ["USDC"], "networks": ["base"], "rail": "pix", "minutes": 20 },
     { "id": "br-sol", "name": "Sol VASP", "country": "BR", "type": "vasp_authorized", "feePct": 0.85,
       "assets": ["USDC"], "networks": ["base", "arbitrum"], "rail": "pix", "minutes": 10 },

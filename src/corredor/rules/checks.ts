@@ -73,7 +73,7 @@ export const checks: { [F in CheckFn]: (ctx: CheckContext, params: Params<F>) =>
     return {
       hit,
       detail: hit
-        ? `Official ${fmtNum(official)} vs. parallel ${fmtNum(parallel)} ${pair}/USD (${spread.toFixed(1)}% gap).`
+        ? `Official ${fmtNum(official)} vs. market (USDT) ${fmtNum(parallel)} ${pair}/USD (${spread.toFixed(1)}% gap).`
         : undefined,
     };
   },

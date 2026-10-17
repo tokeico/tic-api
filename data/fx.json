@@ -1,5 +1,5 @@
 {
-  "_note": "DEMO DATA. Fixed demo FX rates (local currency per USD), not live quotes.",
-  "rates": { "BRL": 5.40, "MXN": 18.50, "ARS_official": 1350, "ARS_parallel": 1460 },
+  "_note": "DEMO DATA. Fixed demo FX rates (local currency per USD), not live quotes. ARS snapshot 2026-10-16: official = BCRA Com. A 3500 wholesale; parallel = USDT/ARS crypto rate.",
+  "rates": { "BRL": 5.40, "MXN": 18.50, "ARS_official": 1518, "ARS_parallel": 1619 },
   "wire": { "feePct": 4.5, "minutes": 2880 }
 }

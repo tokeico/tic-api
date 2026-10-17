@@ -12,7 +12,7 @@ export interface DemoInvoice extends Invoice {
 
 export const DEMO_INVOICES: DemoInvoice[] = [
   {
-    // Ready + warning on Oct 17 (Ponte, pending VASP). Sep 30: PagaFX. Oct 30: Sol.
+    // Ready + warning on Oct 17 (Ponte, hasn't filed for BCB authorization). Sep 30: PagaFX. Oct 31: Sol.
     key: "br",
     invoiceNumber: "EP-2026-0412",
     payeeName: "Estúdio Paulista Design Ltda",
@@ -24,7 +24,7 @@ export const DEMO_INVOICES: DemoInvoice[] = [
     dueDate: "2026-10-31",
     bankId: { type: "pix", value: "7d9f0a52-3c1e-4b8a-9e6f-2a4c8b1d5e30" }, // random (EVP) Pix key
     description: "Brand identity and packaging design, Q3 2026",
-    purposeCode: "DEMO-SERVICES", // placeholder, not a real BCB code
+    purposeCode: "46978", // BCB Res. 277 Annex III "Serviço de negócio" (payments up to US$50k)
     lowConfidence: [],
   },
   {
@@ -86,4 +86,4 @@ export function demoInvoice(key: DemoInvoice["key"]): Invoice {
 }
 
 /** Dates the slider demo uses (PRD §10, ARCHITECTURE §14). */
-export const DEMO_DATES = ["2026-09-30", "2026-10-01", "2026-10-17", "2026-10-30"] as const;
+export const DEMO_DATES = ["2026-09-30", "2026-10-01", "2026-10-17", "2026-10-31"] as const;
