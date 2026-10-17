@@ -55,8 +55,9 @@ import {
 import { currentPrincipal, db, schema } from "../db";
 import { ApiError, notFound } from "../http-error";
 import { appendAudit } from "./audit-log";
+import { fmtUsd } from "../corredor/util";
 import { bankDetailsFor, normalizeTaxId } from "./vendors";
-import { getDemoAsOf, getSettings, planOptions, setDemoAsOf } from "./settings";
+import { getDemoAsOf, getSettings, planOptions, policyCeilings, setDemoAsOf } from "./settings";
 import { Settings, type SettingsPatch, type SettingsUpdate } from "../contracts";
 import type { DbOrTx, Tx } from "./tx";
 
@@ -904,7 +905,11 @@ export async function pay(id: string, by?: string): Promise<PayoutDetail> {
         .from(payments)
         .where(and(ne(payments.status, "failed"), gte(payments.createdAt, startOfUtcDay())));
       if (Number(sentToday ?? 0) + amountUsd > settings.policy.dailyCapUsd) {
-        throw new ApiError(409, "daily_cap_exceeded", `Paying USD ${amountUsd} would bring today's payments over the USD ${settings.policy.dailyCapUsd} daily cap.`);
+        throw new ApiError(
+          409,
+          "daily_cap_exceeded",
+          `Paying ${fmtUsd(amountUsd)} would bring today's payments to ${fmtUsd(Number(sentToday ?? 0) + amountUsd)}, over the ${fmtUsd(settings.policy.dailyCapUsd)} daily cap.`,
+        );
       }
 
       let sent;
@@ -1137,13 +1142,12 @@ const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
  * the request is refused outright — overridable per deployment via env.
  */
 function assertPolicyCeilings(policy: Policy): void {
-  const maxDaily = Number(process.env.POLICY_MAX_DAILY_CAP_USD ?? 1_000_000);
-  const maxSecond = Number(process.env.POLICY_MAX_SECOND_APPROVER_USD ?? 100_000);
-  if (policy.dailyCapUsd > maxDaily || policy.secondApproverAboveUsd > maxSecond) {
+  const max = policyCeilings();
+  if (policy.dailyCapUsd > max.dailyCapUsd || policy.secondApproverAboveUsd > max.secondApproverAboveUsd) {
     throw new ApiError(
       422,
       "policy_above_ceiling",
-      `Policy exceeds the hard ceilings: daily cap at most USD ${maxDaily}, second-approver threshold at most USD ${maxSecond}.`,
+      `Policy exceeds the hard ceilings: daily cap at most ${fmtUsd(max.dailyCapUsd)}, second-approver threshold at most ${fmtUsd(max.secondApproverAboveUsd)}.`,
     );
   }
 }

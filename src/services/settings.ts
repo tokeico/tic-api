@@ -9,6 +9,20 @@ import type { DbOrTx } from "./tx";
 
 export const DEFAULT_AS_OF = () => process.env.DEMO_DEFAULT_AS_OF ?? "2026-10-17";
 
+/** Hard ceilings on what a workspace may set (C4); overridable per deployment. */
+export function policyCeilings(): Policy {
+  return {
+    secondApproverAboveUsd: Number(process.env.POLICY_MAX_SECOND_APPROVER_USD ?? 100_000),
+    dailyCapUsd: Number(process.env.POLICY_MAX_DAILY_CAP_USD ?? 1_000_000),
+  };
+}
+
+/** Effective policy: anything stored above a ceiling is clamped on read. */
+export function clampPolicy(p: Policy): Policy {
+  const c = policyCeilings();
+  return { secondApproverAboveUsd: Math.min(p.secondApproverAboveUsd, c.secondApproverAboveUsd), dailyCapUsd: Math.min(p.dailyCapUsd, c.dailyCapUsd) };
+}
+
 export async function getSettings(q: DbOrTx): Promise<Settings> {
   const rows = await q.select().from(schema.settings);
   const byKey = new Map(rows.map((r) => [r.key, r.value]));
@@ -21,7 +35,7 @@ export async function getSettings(q: DbOrTx): Promise<Settings> {
   return {
     asOf: asOf.success ? asOf.data : DEFAULT_AS_OF(),
     railMode: parseRailMode(process.env.RAIL_MODE),
-    policy: policy.success ? policy.data : DEFAULT_POLICY,
+    policy: clampPolicy(policy.success ? policy.data : DEFAULT_POLICY),
     objective: objective.success ? objective.data : "cheapest",
     disabledOfframps: disabled.success ? disabled.data : [],
     registry: registry.success ? registry.data : {},

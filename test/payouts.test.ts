@@ -111,7 +111,7 @@ suite("payouts API (Postgres)", () => {
     const by = (id: string) => summary(json.payouts, id);
     expect(by(ids.br)).toMatchObject({ status: "ready", warnings: 1, recommended: { id: "BR:usdc-base:br-ponte" } });
     expect(by(ids.mx)).toMatchObject({ status: "awaiting_second_approver", recommended: { id: "MX:usdc-base:mx-puente" } });
-    expect(by(ids.ar)).toMatchObject({ status: "ready", warnings: 1, recommended: { id: "AR:usdt-tron:ar-pampa" } });
+    expect(by(ids.ar)).toMatchObject({ status: "ready", warnings: 0, recommended: { id: "AR:usdt-tron:ar-pampa" } }); // USD invoice: no AR-FX-SPREAD warn (P7)
     expect(by(ids.ve)).toMatchObject({ status: "blocked", recommended: null });
   });
 
@@ -156,7 +156,7 @@ suite("payouts API (Postgres)", () => {
     const setCap = (dailyCapUsd: number) =>
       inWorkspace(() => db.update(schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd } }).where(eq(schema.settings.key, "policy")));
     await setCap(17_000); // Brazil ~$15.7k fits, then Argentina ($4,000) would reach ~$19.7k
-    expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "Maria Lopez", comment: "ok" })).status).toBe(200);
+    expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "Maria Lopez", comment: "ok", acknowledgedWarnings: ["BR-VASP-UNFILED-WARN"] })).status).toBe(200);
     const ar = await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Lopez" });
     expect(ar.status).toBe(409);
     expect(ar.json.error.code).toBe("daily_cap_exceeded");
@@ -350,10 +350,15 @@ suite("payouts API (Postgres)", () => {
     const events = (await get("/api/audit")).json as unknown as Json[];
     expect(events.find((e) => e.type === "settings_changed")!.payload).toMatchObject({ setting: "policy", to: { secondApproverAboveUsd: 3000 } });
 
-    await put({ secondApproverAboveUsd: 50000, dailyCapUsd: 150000 }, "Maria Lopez");
+    // Raising the limit back is a loosening (C4): requested, then confirmed by a different person.
+    const back = await put({ secondApproverAboveUsd: 50000, dailyCapUsd: 150000 }, "Maria Lopez");
+    expect(back.json.pendingPolicy).toMatchObject({ requestedBy: "Maria Lopez" });
+    expect((await get(`/api/payouts/${ids.ar}`)).json.status).toBe("awaiting_second_approver"); // still
+    await post("/api/settings/pending-policy/confirm", { by: "Daniel Ortiz" });
     expect((await get(`/api/payouts/${ids.ar}`)).json.status).toBe("ready");
     const same = await put({ secondApproverAboveUsd: 50000, dailyCapUsd: 150000 });
     expect(same.status).toBe(200); // no change: no new event
+    expect(same.json.pendingPolicy).toBeNull();
   });
 
   test("tamper simulation breaks verification in memory only", async () => {
@@ -667,7 +672,7 @@ suite("payouts API (Postgres)", () => {
     const inv = { ...HOSTILE_INVOICE, invoiceNumber: `CD-${stamp}` };
     const bytes = await invoicePdf(inv);
     const d = await inWorkspace(() => uploadInvoice({ filename: "hostile.pdf", bytes, provider: fakeFor(inv) as never }));
-    expect(d.status).toBe("ready"); // the plan still runs; the hold gates approval, not the engine
+    expect(d.status).toBe("blocked"); // the plan still runs; the security hold gates approval and the unverified vendor gates the plan (C9)
     expect(d.onSecurityHold).toBe(true);
     expect(d.securityHold).toMatchObject({ status: "active" });
     expect(d.securityHold!.findings.length).toBe(3);
@@ -689,11 +694,12 @@ suite("payouts API (Postgres)", () => {
     const memoed = await inWorkspace(() => writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async () => out.shift() }))([good]) as never));
     expect(memoed.memo!.summary).toContain("on security hold");
 
-    // A person clears it; then approval works.
+    // A person clears it; then the call-back check + warning ack let approval work.
     const rev = await post(`/api/payouts/${d.id}/security-review`, { reviewer: "Maria Lopez", decision: "cleared", note: "Read the notes: they're just text. Fields match the contract." });
     expect(rev.json.securityHold).toMatchObject({ status: "cleared", reviewedBy: "Maria Lopez" });
     expect(rev.json.onSecurityHold).toBeUndefined();
-    expect((await post(`/api/payouts/${d.id}/approve`, { approver: "Maria Lopez" })).json.status).toBe("approved");
+    expect((await post(`/api/payouts/${d.id}/bank-verification`, { note: "Called the number in the vendor file; the Pix key matches.", by: "Maria Lopez" })).status).toBe(200);
+    expect((await post(`/api/payouts/${d.id}/approve`, { approver: "Maria Lopez", acknowledgedWarnings: ["BR-VASP-UNFILED-WARN"] })).json.status).toBe("approved");
     // Nothing left to review.
     expect(((await post(`/api/payouts/${d.id}/security-review`, { reviewer: "Maria Lopez", decision: "cleared", note: "again" })).json.error.code)).toBe("no_security_hold");
 
@@ -710,6 +716,169 @@ suite("payouts API (Postgres)", () => {
 
     const held = ((await get("/api/audit")).json as unknown as Json[]).filter((e) => e.type === "security_reviewed");
     expect(held.map((e) => e.payload.decision)).toEqual(["confirmed_suspicious", "cleared"]); // newest first
+  });
+
+  test("P3: a bank id that fails its check gives needs_info and can't be approved", async () => {
+    const bad = await call("PATCH", `/api/payouts/${ids.ar}`, { bankId: { type: "cvu", value: "0000003110000123456780" } });
+    expect(bad.json.status).toBe("needs_info");
+    expect(bad.json.plan.reasons.join(" ")).toContain("Bank identifier failed its check");
+    expect((await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Lopez" })).status).toBe(409);
+    const fixed = await call("PATCH", `/api/payouts/${ids.ar}`, { bankId: { type: "cvu", value: "0000003110000123456781" } });
+    expect(fixed.json.status).toBe("ready");
+  });
+
+  test("C6: the person who cleared the sanctions check can't approve it", async () => {
+    const hit = await call("PATCH", `/api/payouts/${ids.ar}`, { payeeName: "Petróleos de Venezuela S.A." });
+    expect(hit.json.plan.screening.status).toBe("hit");
+    const cleared = await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Daniel Ortiz", decision: "cleared", note: "False positive: a design contractor, not the state oil company." });
+    expect(cleared.json.status).toBe("ready");
+    expect((await post(`/api/payouts/${ids.ar}/approve`, { approver: "Daniel Ortiz" })).json.error.code).toBe("reviewer_cannot_approve");
+    const back = await call("PATCH", `/api/payouts/${ids.ar}`, { payeeName: "Lucía Fernández" });
+    expect(back.json.status).toBe("ready");
+  });
+
+  test("C9: changed bank details hold until a different person verifies by call-back", async () => {
+    // Maria changes the CVU to a different valid one: the vendor record no longer matches.
+    const swap = await call("PATCH", `/api/payouts/${ids.ar}`, { bankId: { type: "cvu", value: "0000003110000120000011" } });
+    expect(swap.json.status).toBe("blocked");
+    expect(swap.json.plan.reasons.join(" ")).toContain("Bank details differ from the verified vendor record");
+    expect(swap.json.plan.reasons.join(" ")).toContain("Call the vendor back");
+    expect(swap.json.checks).toMatchObject({ bankDetails: "changed", injectionScan: "not_run", duplicatePdf: "not_run" });
+    expect((await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Lopez" })).status).toBe(409);
+    // An AP clerk can't verify; nor can the person who made the edit.
+    const clerk = await post(`/api/payouts/${ids.ar}/bank-verification`, { note: "Called the vendor back on the number in the vendor file; CVU confirmed.", by: "Sam Ortiz" });
+    expect(clerk.status).toBe(403);
+    const samePerson = await post(`/api/payouts/${ids.ar}/bank-verification`, { note: "Called the vendor back on the number in the vendor file; CVU confirmed." });
+    expect(samePerson.json.error.code).toBe("same_person");
+    // Another approver verifies: the payout re-plans to ready and can be approved.
+    const verified = await post(`/api/payouts/${ids.ar}/bank-verification`, { note: "Called the vendor back on the number in the vendor file; CVU confirmed.", by: "Daniel Ortiz" });
+    expect(verified.status).toBe(200);
+    expect(verified.json.status).toBe("ready");
+    expect(verified.json.checks.bankDetails).toBe("verified");
+    expect((await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Lopez" })).json.status).toBe("approved");
+    const ev = ((await get("/api/audit")).json as Json[]).find((e) => e.type === "bank_verified" && e.payoutId === ids.ar);
+    expect(ev!.payload).toMatchObject({ bankIdType: "cvu", previous: "changed", by: "Daniel Ortiz" });
+    expect(JSON.stringify(ev!.payload)).not.toContain("0000003110000120000011"); // no bank values in the log
+  });
+
+  test("C8: the pay re-check voids approvals when the rules moved under it", async () => {
+    // A fresh signup gets a fresh seeded workspace so the BR payout can be
+    // approved on Oct 17 and paid only after the Oct 31 rules change.
+    const email = `qa-${crypto.randomUUID()}@example.test`;
+    const signup = await app.request("/api/auth/signup", {
+      method: "POST",
+      headers: { origin: "http://localhost:8080", "content-type": "application/json" },
+      body: JSON.stringify({ name: "Ana Costa", email, password: `Workflow test only ${crypto.randomUUID()}`, workspaceName: "Recheck test" }),
+    });
+    expect(signup.status).toBe(201);
+    const cookie = signup.headers.get("set-cookie")!.split(";")[0]!;
+    const q = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: Json }> => {
+      const r = await app.request(path, {
+        method,
+        headers: { origin: "http://localhost:8080", cookie, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: r.status, json: (await r.json()) as Json };
+    };
+    const list = (await q("GET", "/api/payouts")).json as Json[];
+    const br = list.find((p) => p.country === "BR")!;
+    await q("POST", "/api/plan-all?asOf=2026-10-17");
+    const ok = await q("POST", `/api/payouts/${br.id}/approve`, { approver: "Ana Costa", acknowledgedWarnings: ["BR-VASP-UNFILED-WARN"] });
+    expect(ok.json.status).toBe("approved");
+    // The demo clock moves to Oct 31: BR-VASP-AUTH blocks the approved br-ponte route.
+    await q("POST", "/api/plan-all?asOf=2026-10-31");
+    const fail = await q("POST", `/api/payouts/${br.id}/pay`);
+    expect(fail.status).toBe(409);
+    expect(fail.json.error.code).toBe("pay_recheck_failed");
+    expect(fail.json.error.message).toContain("no longer compliant");
+    const detail = (await q("GET", `/api/payouts/${br.id}`)).json;
+    expect(detail.approvals).toEqual([]);
+    expect(detail.status).toBe("ready"); // voided and re-planned, open for a fresh approval
+    expect(detail.plan.recommended.id).not.toBe("BR:usdc-base:br-ponte");
+    const voided = ((await q("GET", "/api/audit")).json as Json[]).find((e) => e.type === "approval_voided" && e.payoutId === br.id);
+    expect(voided!.payload.routeId).toBe("BR:usdc-base:br-ponte");
+    // Re-approve — the Oct-31 recommended route (authorized Sol VASP) has no warnings — then pay.
+    expect((await q("POST", `/api/payouts/${br.id}/approve`, { approver: "Ana Costa" })).json.status).toBe("approved");
+    const paid = await q("POST", `/api/payouts/${br.id}/pay`);
+    expect(paid.status).toBe(200);
+    expect(paid.json.status).toBe("paid");
+  });
+
+  test("the daily cap is enforced again at pay time, without voiding approvals", async () => {
+    // AR is approved (end of the C9 test); today's payments already exceed a 1-USD cap.
+    const { eq } = await import("drizzle-orm");
+    await inWorkspace(() => dbmod.db.update(dbmod.schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd: 1 } }).where(eq(dbmod.schema.settings.key, "policy")));
+    const res = await post(`/api/payouts/${ids.ar}/pay`);
+    expect(res.status).toBe(409);
+    expect(res.json.error.code).toBe("daily_cap_exceeded");
+    await inWorkspace(() => dbmod.db.update(dbmod.schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd: 150_000 } }).where(eq(dbmod.schema.settings.key, "policy")));
+    expect((await get(`/api/payouts/${ids.ar}`)).json.status).toBe("approved"); // stayed approved: no voiding
+  });
+
+  test("P5: warnings on the recommended route must be acknowledged to approve", async () => {
+    const { invoicePdf } = await import("../scripts/demo-pdfs");
+    const { DEMO_INVOICES, sha256Hex } = await import("../src/corredor");
+    const { schema, db } = dbmod;
+    const br = DEMO_INVOICES.find((d) => d.key === "br")!;
+    const num = `EP-${Date.now() % 1_000_000}`;
+    const pdf = await invoicePdf({ ...br, invoiceNumber: num });
+    const { key: _k, payeeEmail: _e, ...inv } = br;
+    await inWorkspace(() => db.insert(schema.extractionCache).values({ pdfSha256: sha256Hex(pdf), invoice: { ...inv, invoiceNumber: num }, model: "cached" }));
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array(pdf).buffer as ArrayBuffer], "estudio.pdf", { type: "application/pdf" }));
+    const res = await authorizedRequest("/api/invoices", { method: "POST", body: form });
+    expect(res.status).toBe(201);
+    const d = (await res.json()) as Json;
+    expect(d.status).toBe("ready");
+    expect(d.warnings).toBe(1);
+    const noAck = await post(`/api/payouts/${d.id}/approve`, { approver: "Maria Lopez" });
+    expect(noAck.status).toBe(409);
+    expect(noAck.json.error.code).toBe("warnings_not_acknowledged");
+    expect(noAck.json.error.message).toContain("BR-VASP-UNFILED-WARN");
+    const acked = await post(`/api/payouts/${d.id}/approve`, { approver: "Maria Lopez", acknowledgedWarnings: ["BR-VASP-UNFILED-WARN"] });
+    expect(acked.status).toBe(200);
+    expect(acked.json.approvals[0].acknowledgedWarnings).toEqual(["BR-VASP-UNFILED-WARN"]);
+    const ev = ((await get("/api/audit")).json as Json[]).find((e) => e.type === "approved" && e.payoutId === d.id);
+    expect(ev!.payload.acknowledgedWarnings).toEqual(["BR-VASP-UNFILED-WARN"]);
+  });
+
+  test("C4: loosening the policy needs a second person; ceilings are hard", async () => {
+    const put = (policy: unknown, by?: string) => call("PUT", "/api/settings", { policy, by });
+    // Raising a limit is a request, not a change.
+    const req = await put({ secondApproverAboveUsd: 100_000, dailyCapUsd: 150_000 }, "Maria Lopez");
+    expect(req.status).toBe(200);
+    expect(req.json.policy.secondApproverAboveUsd).toBe(50_000); // unchanged
+    expect(req.json.pendingPolicy).toMatchObject({ requestedBy: "Maria Lopez", policy: { secondApproverAboveUsd: 100_000, dailyCapUsd: 150_000 } });
+    expect(((await get("/api/audit")).json as Json[]).some((e) => e.type === "settings_change_requested")).toBe(true);
+    // The requester can't confirm; a different person can.
+    expect((await post("/api/settings/pending-policy/confirm", { by: "Maria Lopez" })).json.error.code).toBe("same_person");
+    const confirmed = await post("/api/settings/pending-policy/confirm", { by: "Daniel Ortiz" });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.json.policy.secondApproverAboveUsd).toBe(100_000);
+    expect(confirmed.json.pendingPolicy).toBeNull();
+    // Above the hard ceiling: refused on request (422).
+    expect((await put({ secondApproverAboveUsd: 50_000, dailyCapUsd: 2_000_000 }, "Maria Lopez")).json.error.code).toBe("policy_above_ceiling");
+    // Tightening applies immediately, no pending request.
+    const tighten = await put({ secondApproverAboveUsd: 40_000, dailyCapUsd: 150_000 }, "Maria Lopez");
+    expect(tighten.json.policy.secondApproverAboveUsd).toBe(40_000);
+    expect(tighten.json.pendingPolicy).toBeNull();
+    // Loosen again → pending; only a controller can cancel it.
+    await put({ secondApproverAboveUsd: 60_000, dailyCapUsd: 150_000 }, "Maria Lopez");
+    expect((await call("DELETE", "/api/settings/pending-policy", { by: "Daniel Ortiz" })).json.error.code).toBe("not_authorized");
+    const cancelled = await call("DELETE", "/api/settings/pending-policy", { by: "Maria Lopez" });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.json.pendingPolicy).toBeNull();
+    expect(((await get("/api/audit")).json as Json[]).some((e) => e.type === "settings_change_cancelled")).toBe(true);
+    expect((await post("/api/settings/pending-policy/confirm", { by: "Daniel Ortiz" })).json.error.code).toBe("no_pending_policy");
+    // Restore the default via the two-person path.
+    await put({ secondApproverAboveUsd: 50_000, dailyCapUsd: 150_000 }, "Maria Lopez");
+    expect((await post("/api/settings/pending-policy/confirm", { by: "Daniel Ortiz" })).json.policy.secondApproverAboveUsd).toBe(50_000);
+
+    // A stored policy above the ceilings (e.g. written before they existed) is clamped on read.
+    const { eq } = await import("drizzle-orm");
+    await inWorkspace(() => dbmod.db.update(dbmod.schema.settings).set({ value: { secondApproverAboveUsd: 500_000, dailyCapUsd: 10_000_000 } }).where(eq(dbmod.schema.settings.key, "policy")));
+    expect((await get("/api/settings")).json.policy).toEqual({ secondApproverAboveUsd: 100_000, dailyCapUsd: 1_000_000 });
+    await inWorkspace(() => dbmod.db.update(dbmod.schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd: 150_000 } }).where(eq(dbmod.schema.settings.key, "policy")));
   });
 
   test("POST /api/demo/reset wipes back to four draft payouts and a clean chain", async () => {
