@@ -121,3 +121,7 @@ Short version: edit `src/db/schema.ts`, run `bun run db:generate`, run `bun run 
 Import `db` from `src/db`. Never use `db:push` against shared or production databases.
 JSON columns: use `jsonb` from `src/db/jsonb.ts`, never drizzle's built-in one (it double-encodes under Bun.SQL).
 Reset demo data with `bun run db:seed`.
+
+## Agent (local LLM)
+
+The Agent tab uses a local model in Ollama with read-only tools. **Read `docs/AGENT.md` before touching `src/llm/`.** Never add a tool that acts; actions go through `propose_action` for a person to confirm.
