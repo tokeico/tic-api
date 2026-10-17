@@ -128,7 +128,7 @@ Production hardening for Option B:
 | Symptom | Fix |
 |---|---|
 | `DATABASE_URL is not set` | `cp .env.example .env` (run commands from the `tic-api/` directory) |
-| `docker: unknown command: docker compose` | Install the Docker Compose v2 plugin (`docker-compose-plugin` / `docker-compose-v2` package) |
+| `docker: unknown command: docker compose` or `unknown shorthand flag: 'd' in -d` | The Docker Compose plugin is missing. With sudo: `sudo apt install docker-compose-v2`. Without sudo: download `docker-compose-linux-x86_64` from https://github.com/docker/compose/releases, check it against its `.sha256`, and install it to `~/.docker/cli-plugins/docker-compose` with `chmod +x`. Confirm with `docker compose version` |
 | `port is already allocated` on 5432 | Set `POSTGRES_PORT=5433` in `.env` and change the port in `DATABASE_URL` |
 | `password authentication failed` | The volume was created with different credentials. Run `bun run db:reset` locally (wipes data) |
 | `relation "..." does not exist` | Run `bun run db:migrate` |
