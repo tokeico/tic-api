@@ -8,7 +8,8 @@ import { Hono } from "hono";
 import { SettingsPatch } from "../contracts";
 import { getProvider } from "../llm/provider";
 import { isIsoDate, reference, rulesActiveOn, screenPayee } from "../corredor";
-import { db } from "../db";
+import { adminDb, db } from "../db";
+import { requirePrincipal } from "../security/middleware";
 import { ApiError } from "../http-error";
 import { updateSettings } from "../services/payouts";
 import { getDemoAsOf, getSettings } from "../services/settings";
@@ -33,6 +34,8 @@ referenceRoutes.get("/settings", async (c) => c.json(await getSettings(db)));
 
 /** PUT /api/settings  { policy?, objective?, disabledOfframps?, registry?, by? }  Changes settings and re-plans open payouts. */
 referenceRoutes.put("/settings", async (c) => {
+  const principal = requirePrincipal();
+  if (principal.role !== "controller") throw new ApiError(403, "not_authorized", "Only a workspace controller can change policy or providers.");
   let raw: unknown;
   try {
     raw = await c.req.json();
@@ -43,14 +46,14 @@ referenceRoutes.put("/settings", async (c) => {
   if (!parsed.success) {
     throw new ApiError(400, "invalid_body", parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; "));
   }
-  return c.json(await updateSettings(parsed.data));
+  return c.json(await updateSettings({ ...parsed.data, by: principal.userId }));
 });
 
 /** GET /api/health  Pre-demo checklist: database up, local model reachable and pulled. */
 referenceRoutes.get("/health", async (c) => {
   let dbOk = false;
   try {
-    await db.execute(sql`select 1`);
+    await adminDb.execute(sql`select 1`);
     dbOk = true;
   } catch {}
   const llm = getProvider();

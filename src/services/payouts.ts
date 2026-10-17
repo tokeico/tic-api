@@ -50,7 +50,7 @@ import {
   type SanctionsInput,
   type ScreeningInput,
 } from "../corredor";
-import { db, schema } from "../db";
+import { currentPrincipal, db, schema } from "../db";
 import { ApiError, notFound } from "../http-error";
 import { appendAudit } from "./audit-log";
 import { getDemoAsOf, getSettings, planOptions, setDemoAsOf } from "./settings";
@@ -333,6 +333,7 @@ async function assertReplannable(tx: Tx, payout: typeof payouts.$inferSelect, wh
 }
 
 async function resolveUser(tx: Tx, ref: string, allowed: readonly string[], action: string) {
+  ref = currentPrincipal()?.userId ?? ref;
   const byId = isUuid(ref) ? await tx.query.users.findFirst({ where: eq(users.id, ref) }) : undefined;
   const user =
     byId ??

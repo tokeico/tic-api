@@ -1,7 +1,7 @@
 // One error type for every route. index.ts turns it into
 // `{ error: { code, message } }` with the right status (contracts.ApiError).
 
-export type ErrorStatus = 400 | 403 | 404 | 409 | 422 | 502 | 503;
+export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 502 | 503;
 
 export class ApiError extends Error {
   constructor(

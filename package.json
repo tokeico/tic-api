@@ -19,6 +19,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "unpdf": "^1.9.0",

@@ -8,10 +8,10 @@
 // Refuses to run against a non-local DATABASE_URL unless SEED_ALLOW_REMOTE=1.
 
 import { resetDemo } from "../services/demo";
-import { client } from "./index";
+import { client, withLegacyDatabase } from "./index";
 
 try {
-  const n = await resetDemo();
+  const n = await withLegacyDatabase(() => resetDemo());
   console.log(`Seeded ${n.users} users, ${n.payouts} invoices/payouts, settings.`);
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);

@@ -4,7 +4,8 @@
 
 import { sql } from "drizzle-orm";
 import { DEFAULT_POLICY, DEMO_INVOICES } from "../corredor";
-import { db, schema } from "../db";
+import { currentPrincipal, db, schema } from "../db";
+import { ApiError } from "../http-error";
 import { DEFAULT_AS_OF } from "./settings";
 
 const { invoices, payouts, settings, users } = schema;
@@ -33,7 +34,13 @@ export function assertResetAllowed(): void {
  * survive a reset.
  */
 export async function resetDemo(): Promise<{ users: number; payouts: number }> {
-  assertResetAllowed();
+  const principal = currentPrincipal();
+  if (principal) {
+    if (!principal.owner || principal.credential !== "session") throw new ApiError(403, "not_authorized", "Only the signed-in workspace owner can reset this demo.");
+    if ((process.env.RAIL_MODE ?? "mock") !== "mock") throw new ApiError(403, "demo_only", "Reset is available only on the simulated payment rail.");
+  } else {
+    assertResetAllowed();
+  }
   // The 4 demo invoices live in src/corredor/demo.ts so the seed, the golden
   // tests and the fixtures can't drift apart.
   const demoInvoices = DEMO_INVOICES.map(({ key: _key, bankId, ...inv }) => ({
@@ -47,10 +54,10 @@ export async function resetDemo(): Promise<{ users: number; payouts: number }> {
       TRUNCATE audit_events, audit_checkpoints, journal_lines, journal_entries, reconciliations,
                payments, approvals, vendor_requests, memos, plans, screenings,
                sanctions_reviews, security_holds,
-               payouts, invoices, users, settings
+               payouts, invoices, ${principal ? sql.raw("") : sql.raw("users,")} settings
       RESTART IDENTITY CASCADE`);
 
-    await tx.insert(users).values([...DEMO_USERS]);
+    if (!principal) await tx.insert(users).values([...DEMO_USERS]);
 
     // now() is the transaction start, so give each row its own millisecond:
     // the inbox lists payouts in the PRD §10 order (BR, MX, AR, VE).
@@ -68,5 +75,6 @@ export async function resetDemo(): Promise<{ users: number; payouts: number }> {
       { key: "rules_version", value: "v1" },
     ]);
   });
-  return { users: DEMO_USERS.length, payouts: demoInvoices.length };
+  const memberCount = principal ? (await db.select({ id: users.id }).from(users)).length : DEMO_USERS.length;
+  return { users: memberCount, payouts: demoInvoices.length };
 }

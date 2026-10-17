@@ -11,6 +11,7 @@ import * as svc from "../services/payouts";
 import { writeMemo } from "../services/memo";
 import { getDemoAsOf } from "../services/settings";
 import { db } from "../db";
+import { requirePrincipal } from "../security/middleware";
 
 async function body<T extends z.ZodType>(c: Context, schema: T): Promise<z.infer<T>> {
   let raw: unknown;
@@ -59,7 +60,7 @@ async function optionalBody<T extends z.ZodType>(c: Context, schema: T): Promise
 
 payoutRoutes.patch("/:id", async (c) => {
   const { by, ...patch } = await body(c, InvoicePatch.extend({ by: WithBy.shape.by }));
-  return c.json(await svc.editInvoice(c.req.param("id"), patch, by));
+  return c.json(await svc.editInvoice(c.req.param("id"), patch, requirePrincipal().userId));
 });
 
 /** GET /api/payouts/:id/preview?asOf=  Dry run: the plan on another date. Stores nothing. */
@@ -87,24 +88,30 @@ payoutRoutes.get("/:id/replay", async (c) => {
 payoutRoutes.post("/:id/plan", async (c) => c.json(await svc.planOne(c.req.param("id"), asOfParam(c))));
 
 payoutRoutes.post("/:id/screening-review", async (c) =>
-  c.json(await svc.reviewScreening(c.req.param("id"), await body(c, ScreeningReviewRequest))),
+  c.json(await svc.reviewScreening(c.req.param("id"), { ...await body(c, ScreeningReviewRequest), reviewer: requirePrincipal().userId })),
 );
 
 /** POST /api/payouts/:id/sanctions-review  A compliance person releases the VE-OFAC hold (or confirms it). */
 payoutRoutes.post("/:id/sanctions-review", async (c) =>
-  c.json(await svc.reviewSanctions(c.req.param("id"), await body(c, SanctionsReviewRequest))),
+  c.json(await svc.reviewSanctions(c.req.param("id"), { ...await body(c, SanctionsReviewRequest), reviewer: requirePrincipal().userId })),
 );
 
 /** POST /api/payouts/:id/security-review  A person clears the security hold or keeps the payout held. */
 payoutRoutes.post("/:id/security-review", async (c) =>
-  c.json(await svc.reviewSecurityHold(c.req.param("id"), await body(c, SecurityReviewRequest))),
+  c.json(await svc.reviewSecurityHold(c.req.param("id"), { ...await body(c, SecurityReviewRequest), reviewer: requirePrincipal().userId })),
 );
 
-payoutRoutes.post("/:id/approve", async (c) => c.json(await svc.approve(c.req.param("id"), await body(c, ApproveRequest))));
+payoutRoutes.post("/:id/approve", async (c) => c.json(await svc.approve(c.req.param("id"), { ...await body(c, ApproveRequest), approver: requirePrincipal().userId })));
 
-payoutRoutes.post("/:id/pay", async (c) => c.json(await svc.pay(c.req.param("id"), (await optionalBody(c, WithBy)).by)));
+payoutRoutes.post("/:id/pay", async (c) => {
+  await optionalBody(c, WithBy);
+  return c.json(await svc.pay(c.req.param("id"), requirePrincipal().userId));
+});
 
-payoutRoutes.post("/:id/reconcile", async (c) => c.json(await svc.reconcilePayout(c.req.param("id"), (await optionalBody(c, WithBy)).by)));
+payoutRoutes.post("/:id/reconcile", async (c) => {
+  await optionalBody(c, WithBy);
+  return c.json(await svc.reconcilePayout(c.req.param("id"), requirePrincipal().userId));
+});
 
 /** POST /api/plan-all?asOf=  The as-of slider. Without asOf it re-plans on the current demo date. */
 export const planAllRoute = new Hono();

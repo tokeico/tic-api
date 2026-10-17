@@ -58,6 +58,7 @@ import {
   type SecurityFinding,
 } from "./types";
 import { jsonb } from "./jsonb";
+export * from "./auth-schema";
 
 // ---- Enums -----------------------------------------------------------------
 

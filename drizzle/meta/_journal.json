@@ -57,6 +57,13 @@
       "when": 1792261619585,
       "tag": "0007_aspiring_sharon_ventura",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792267139240,
+      "tag": "0008_identity_auth",
+      "breakpoints": true
     }
   ]
 }
