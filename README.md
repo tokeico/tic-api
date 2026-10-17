@@ -41,7 +41,11 @@ See [docs/AGENT.md](./docs/AGENT.md) for model settings and extraction behavior,
 ## Checks
 
 ```sh
-bun test test/rules.test.ts test/corredor.test.ts test/audit.test.ts test/rails.test.ts
+bun test test/rules.test.ts test/corredor.test.ts test/audit.test.ts test/rails.test.ts test/agent.test.ts test/presentation.test.ts
 ```
 
 The PostgreSQL integration suite in `test/payouts.test.ts` additionally needs a dedicated `*_test` database. It wipes and reseeds that database; see `.env.example` for setup.
+
+## Fictional presentation screening
+
+`GET /api/demo/screen?name=Demo%20Lumen%20Trading` runs the normal name-matching algorithm against invented organizations and aliases in `data/presentation/`. Every response includes `simulated: true` and a fictional list version. This read-only sandbox never participates in payout approval or replaces the real OFAC snapshot in `data/sdn.csv` and `data/alt.csv`.
