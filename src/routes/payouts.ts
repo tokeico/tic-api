@@ -9,6 +9,7 @@ import { isIsoDate } from "../corredor";
 import { ApiError } from "../http-error";
 import * as svc from "../services/payouts";
 import { writeMemo } from "../services/memo";
+import { REMITTANCE_LANGUAGES, remittanceAdvice, type RemittanceLanguage } from "../services/remittance";
 import { getDemoAsOf } from "../services/settings";
 import { db } from "../db";
 import { requirePrincipal } from "../security/middleware";
@@ -39,7 +40,47 @@ export const payoutRoutes = new Hono();
 // ?detail=1 returns full PayoutDetail rows (plans, memos, approvals...) in one request.
 payoutRoutes.get("/", async (c) => c.json(c.req.query("detail") ? await svc.listPayoutDetails() : await svc.listPayouts()));
 
+/**
+ * POST /api/payouts/batch  { action, ids, acknowledgedWarnings? }  One action on many payouts (P6).
+ * Each payout goes through exactly the same checks as the single endpoint, one
+ * at a time, so the daily cap, two-person rule and holds still apply per payout.
+ * A failure on one doesn't stop the others; every result is reported.
+ */
+const BatchRequest = z.object({
+  action: z.enum(["approve", "pay", "reconcile"]),
+  ids: z.array(z.string().uuid()).min(1).max(100),
+  acknowledgedWarnings: z.record(z.string(), z.array(z.string())).optional(), // per payout id, for approve
+});
+
+payoutRoutes.post("/batch", async (c) => {
+  const req = await body(c, BatchRequest);
+  const me = requirePrincipal().userId;
+  const results: { id: string; ok: boolean; status?: string; error?: { code: string; message: string } }[] = [];
+  for (const id of [...new Set(req.ids)]) {
+    try {
+      const d =
+        req.action === "approve"
+          ? await svc.approve(id, { approver: me, decision: "approved", acknowledgedWarnings: req.acknowledgedWarnings?.[id] ?? [] })
+          : req.action === "pay"
+            ? await svc.pay(id, me)
+            : await svc.reconcilePayout(id, me);
+      results.push({ id, ok: true, status: d.status });
+    } catch (err) {
+      if (!(err instanceof ApiError)) throw err;
+      results.push({ id, ok: false, error: { code: err.code, message: err.message } });
+    }
+  }
+  return c.json({ results });
+});
+
 payoutRoutes.get("/:id", async (c) => c.json(await svc.getPayout(c.req.param("id"))));
+
+/** GET /api/payouts/:id/remittance?lang=pt|es|en  Payment advice for the supplier (P11). Prepared, not sent. */
+payoutRoutes.get("/:id/remittance", async (c) => {
+  const lang = c.req.query("lang");
+  if (lang !== undefined && !(REMITTANCE_LANGUAGES as readonly string[]).includes(lang)) throw new ApiError(400, "invalid_lang", "lang must be pt, es or en.");
+  return c.json(await remittanceAdvice(c.req.param("id"), requirePrincipal().workspaceName, lang as RemittanceLanguage | undefined));
+});
 
 const WithBy = z.object({ by: z.string().min(1).optional() }); // who acted (name, email or id), recorded in the audit log
 

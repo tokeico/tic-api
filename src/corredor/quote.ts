@@ -43,7 +43,8 @@ export function wireRoute(invoice: Invoice, amountUsd: number, fx: FxTable): Rou
   };
 }
 
-export function stablecoinRoutes(invoice: Invoice, amountUsd: number, offramps: Offramp[]): Route[] {
+/** All-in cost of a stablecoin route: on-ramp + off-ramp %, plus the flat network fee. */
+export function stablecoinRoutes(invoice: Invoice, amountUsd: number, offramps: Offramp[], fx: FxTable): Route[] {
   const routes: Route[] = [];
   for (const o of offramps) {
     if (o.country !== invoice.payeeCountry) continue;
@@ -56,8 +57,8 @@ export function stablecoinRoutes(invoice: Invoice, amountUsd: number, offramps: 
           network,
           offramp: o,
           rail: o.rail,
-          feePct: o.feePct,
-          feeUsd: round2((amountUsd * o.feePct) / 100),
+          feePct: round2(o.feePct + fx.onramp.feePct),
+          feeUsd: round2((amountUsd * (o.feePct + fx.onramp.feePct)) / 100 + (fx.networkFeeUsd[network] ?? 0)),
           minutes: o.minutes,
           amountUsd,
         });
@@ -70,5 +71,5 @@ export function stablecoinRoutes(invoice: Invoice, amountUsd: number, offramps: 
 /** Wire first, then stablecoin routes in registry order. */
 export function quote(invoice: Invoice, ref: { offramps: Offramp[]; fx: FxTable }): Route[] {
   const amountUsd = toUsd(invoice.amount, invoice.currency, ref.fx);
-  return [wireRoute(invoice, amountUsd, ref.fx), ...stablecoinRoutes(invoice, amountUsd, ref.offramps)];
+  return [wireRoute(invoice, amountUsd, ref.fx), ...stablecoinRoutes(invoice, amountUsd, ref.offramps, ref.fx)];
 }

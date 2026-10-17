@@ -2,10 +2,12 @@
 //   bytes → sha256 → duplicate check → text → injection scan → extraction
 //   cache or local model → invoice + draft payout + security hold (if flagged)
 //   + "extracted" audit event (one transaction) → plan.
+// POST /api/invoices/manual: the same, from fields a person typed in, for
+// when the local model is down or the PDF has no text layer.
 
 import { eq } from "drizzle-orm";
-import type { Invoice, PayoutDetail } from "../contracts";
-import { sha256Hex } from "../corredor";
+import { Invoice, type PayoutDetail } from "../contracts";
+import { sha256Hex, validateInvoice } from "../corredor";
 import { db, schema } from "../db";
 import { ApiError } from "../http-error";
 import { maskDigits } from "../llm/agent";
@@ -14,6 +16,7 @@ import { scanInjections } from "../llm/injection";
 import { LlmUnavailableError, type LlmProvider, getProvider } from "../llm/provider";
 import { appendAudit } from "./audit-log";
 import { planOne } from "./payouts";
+import { assertNotDuplicate } from "./duplicates";
 
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
@@ -63,6 +66,7 @@ export async function uploadInvoice({ filename, bytes, provider = getProvider() 
     model = provider.model;
     await db.insert(extractionCache).values({ pdfSha256: sha, invoice, model }).onConflictDoNothing();
   }
+  await assertNotDuplicate(db, invoice);
 
   const payoutId = await db.transaction(async (tx) => {
     const [row] = await tx
@@ -105,6 +109,49 @@ export async function uploadInvoice({ filename, bytes, provider = getProvider() 
         payload: { holdId: hold!.id, findings: findings.length, patterns: [...new Set(findings.map((f) => f.pattern))], quotes: findings.map((f) => maskDigits(f.quote)) },
       });
     }
+    return payout!.id;
+  });
+
+  return planOne(payoutId);
+}
+
+/** POST /api/invoices/manual  A person types the invoice in. Same checks as an upload, minus the PDF. */
+export async function enterInvoice(input: Omit<Invoice, "lowConfidence">, actorId: string): Promise<PayoutDetail> {
+  const parsed = Invoice.safeParse({ ...input, lowConfidence: [] });
+  if (!parsed.success) throw new ApiError(422, "invalid_invoice", parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+  const invoice = parsed.data;
+  const issues = validateInvoice(invoice);
+  const lowConfidence = [...new Set(issues.map((i) => i.field))];
+
+  const payoutId = await db.transaction(async (tx) => {
+    await assertNotDuplicate(tx, invoice);
+    const [row] = await tx
+      .insert(invoices)
+      .values({
+        invoiceNumber: invoice.invoiceNumber,
+        payeeName: invoice.payeeName,
+        payeeCountry: invoice.payeeCountry,
+        payeeTaxId: invoice.payeeTaxId,
+        amount: invoice.amount,
+        currency: invoice.currency,
+        dueDate: invoice.dueDate,
+        bankIdType: invoice.bankId?.type ?? null,
+        bankIdValue: invoice.bankId?.value ?? null,
+        description: invoice.description,
+        purposeCode: invoice.purposeCode,
+        lowConfidence,
+        source: "upload",
+        extractionSource: "manual",
+        rawExtraction: invoice,
+      })
+      .returning({ id: invoices.id });
+    const [payout] = await tx.insert(payouts).values({ invoiceId: row!.id }).returning({ id: payouts.id });
+    await appendAudit(tx, {
+      payoutId: payout!.id,
+      actorId,
+      type: "extracted",
+      payload: { source: "manual", lowConfidence, issues: issues.map((i) => i.field) },
+    });
     return payout!.id;
   });
 

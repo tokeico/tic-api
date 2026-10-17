@@ -57,6 +57,7 @@ import { ApiError, notFound } from "../http-error";
 import { appendAudit } from "./audit-log";
 import { fmtUsd } from "../corredor/util";
 import { bankDetailsFor, normalizeTaxId } from "./vendors";
+import { assertNotDuplicate } from "./duplicates";
 import { getDemoAsOf, getSettings, planOptions, policyCeilings, setDemoAsOf } from "./settings";
 import { Settings, type SettingsPatch, type SettingsUpdate } from "../contracts";
 import type { DbOrTx, Tx } from "./tx";
@@ -67,7 +68,7 @@ const { payouts, plans, screenings, sanctionsReviews, securityHolds, approvals, 
 const REPLANNABLE: PayoutStatus[] = ["draft", "needs_info", "blocked", "awaiting_second_approver", "ready"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const APPROVER_ROLES = ["controller", "approver"] as const;
-const EDITOR_ROLES = ["controller", "approver", "ap_clerk"] as const;
+export const EDITOR_ROLES = ["controller", "approver", "ap_clerk"] as const;
 
 export const isUuid = (s: string) => UUID.test(s);
 
@@ -530,6 +531,7 @@ export async function editInvoice(id: string, patch: InvoicePatch, by?: string):
       ...new Set([...current.lowConfidence.filter((f) => !edited.includes(f as keyof InvoicePatch)), ...issues.map((i) => i.field)]),
     ];
     const inv = merged.data;
+    if (edited.some((f) => f === "invoiceNumber" || f === "payeeTaxId" || f === "payeeCountry")) await assertNotDuplicate(tx, inv, row.id);
     await tx
       .update(schema.invoices)
       .set({

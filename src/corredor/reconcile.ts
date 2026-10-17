@@ -73,10 +73,18 @@ export function reconcile({ payoutId, invoice, payment, others = [] }: Reconcile
 
 const NETWORK_LABEL: Record<string, string> = { base: "Base", arbitrum: "Arbitrum", tron: "Tron" };
 
-export function cashAccount(route: Route): string {
-  return route.kind === "stablecoin" && route.asset && route.network
-    ? `Cash – ${route.asset} (${NETWORK_LABEL[route.network] ?? route.network})`
-    : "Cash – Operating bank (USD)";
+/** Pay-through: USD leaves the operating bank account and the coin only passes
+ *  through the on-ramp and off-ramp, so the company never holds stablecoins on
+ *  its balance sheet. The chain leg goes in the line description instead. */
+export function cashAccount(_route: Route): string {
+  return "Cash – Operating bank (USD)";
+}
+
+function cashDescription(route: Route, txHash: string | null, railRef: string | null): string | null {
+  if (route.kind === "stablecoin" && route.asset && route.network) {
+    return `Pay-through via ${route.asset} on ${NETWORK_LABEL[route.network] ?? route.network}${txHash ? `, tx ${txHash}` : ""}`;
+  }
+  return txHash ?? railRef ?? null;
 }
 
 export interface JournalInput {
@@ -92,7 +100,7 @@ export interface JournalInput {
  *   Dr Accounts Payable – payee   invoice at the booking rate
  *   Dr Bank & network fees        quoted route fee
  *   Dr FX loss / Cr FX gain       settle-rate cost minus booked AP
- *   Cr Cash – USDC (Base)         USD actually sent (settled cost + fee)
+ *   Cr Cash – Operating bank (USD) USD actually sent (settled cost + fee); pay-through, no coin held
  */
 export function buildJournalEntry({ payoutId, invoice, payment, bookingRate, entryDate }: JournalInput): JournalEntry {
   const ap = toCents(invoice.amount / bookingRate);
@@ -127,7 +135,7 @@ export function buildJournalEntry({ payoutId, invoice, payment, bookingRate, ent
     {
       lineNo: 4,
       account: cashAccount(payment.route),
-      description: payment.txHash ?? payment.railRef ?? null,
+      description: cashDescription(payment.route, payment.txHash, payment.railRef),
       debit: 0,
       credit: fromCents(cash),
     },

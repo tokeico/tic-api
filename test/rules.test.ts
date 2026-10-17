@@ -53,7 +53,7 @@ describe("golden: demo invoices across the slider dates", () => {
     expect(pagafx.results.find((r) => r.outcome === "block")?.ruleId).toBe("BR-561-EFX");
     expect(resultFor(p, "BR-521-FX")?.outcome).toBe("pass");
     expect(p.recommended?.amountUsd).toBe(15_740.74);
-    expect(p.recommended?.feeUsd).toBe(110.19); // 0.70%
+    expect(p.recommended?.feeUsd).toBe(125.98); // 0.70% off-ramp + 0.10% on-ramp + $0.05 Base gas
   });
 
   test("MX is always Puente and awaiting a second approver", () => {

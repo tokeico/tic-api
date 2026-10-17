@@ -274,6 +274,9 @@ export async function chatJSON<T extends z.ZodType>(schema: T, system: string, u
 | GET | `/api/payouts/:id/preview?asOf=&registry=id:type` | dry run: the plan on another date, optionally with a hypothetical registry update. Stores nothing |
 | GET | `/api/payouts/:id/replay?n=100` | recompute the plan n times → `{ identical, matchesStored, fingerprint, ms }` (determinism proof) |
 | POST | `/api/invoices` | multipart PDF (`file`) → text → injection scan → checksum pre-pass + local model → invoice + payout (+ security hold if flagged) → plan. `409` duplicate, `422` no text layer, `503` model down (cache hits still work). See docs/AGENT.md |
+| POST | `/api/invoices/manual` | JSON invoice fields typed by a person (controller, approver or ap_clerk) → invoice + payout → plan. Use when the local model is down or the PDF has no text. `409 duplicate_invoice` when the same supplier tax ID + invoice number is already in the inbox (also checked on upload and on edits) |
+| POST | `/api/payouts/batch` | `{ action: approve\|pay\|reconcile, ids, acknowledgedWarnings? }` → `{ results: [{ id, ok, status?, error? }] }`. Runs the single-payout checks on each id in turn; one failure doesn't stop the rest |
+| GET | `/api/payouts/:id/remittance?lang=pt\|es\|en` | Payment advice for the supplier (invoice #, amount, payer, Pix E2E / SPEI clave de rastreo / transfer id). Prepared, not sent: there is no mail provider |
 | POST | `/api/payouts/:id/memo` | the local model writes the memo for the current plan; citation and decision guards, else the template stays |
 | POST/GET | `/api/agent/chat` · `/api/agent/status` | the Agent tab's local model (read-only tools + proposals) |
 | PATCH | `/api/payouts/:id` | edit invoice fields → re-plan. A failed checksum puts the field back in `lowConfidence`. Approved payouts are frozen (409 `plan_locked`) |

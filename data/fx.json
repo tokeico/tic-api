@@ -1,5 +1,21 @@
 {
-  "_note": "DEMO DATA. Fixed demo FX rates (local currency per USD), not live quotes. ARS snapshot 2026-10-16: official = BCRA Com. A 3500 wholesale; parallel = USDT/ARS crypto rate.",
-  "rates": { "BRL": 5.40, "MXN": 18.50, "ARS_official": 1518, "ARS_parallel": 1619 },
-  "wire": { "feePct": 4.5, "minutes": 2880 }
+  "_note": "DEMO DATA. Fixed demo FX rates (local currency per USD), not live quotes. ARS snapshot 2026-10-16: official = BCRA Com. A 3500 wholesale; parallel = USDT/ARS crypto rate. Wire = unnegotiated US bank wire, all-in (FX margin + fees), about 2–3% on a $25k payment; negotiated FX lines (Wise, Corpay) run nearer 1%. Stablecoin routes add the on-ramp (USD→coin) fee and a flat network fee per transfer on top of the off-ramp fee.",
+  "rates": {
+    "BRL": 5.4,
+    "MXN": 18.5,
+    "ARS_official": 1518,
+    "ARS_parallel": 1619
+  },
+  "wire": {
+    "feePct": 2.5,
+    "minutes": 2880
+  },
+  "onramp": {
+    "feePct": 0.1
+  },
+  "networkFeeUsd": {
+    "base": 0.05,
+    "arbitrum": 0.1,
+    "tron": 1.5
+  }
 }

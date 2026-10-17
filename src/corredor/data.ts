@@ -18,7 +18,12 @@ export const RULES_VERSION = "v1";
 export const FxTable = z.object({
   /** Local currency per USD. ARS has `ARS_official` and `ARS_parallel`. */
   rates: z.record(z.string(), z.number().positive()),
+  /** Unnegotiated bank wire, all-in. */
   wire: z.object({ feePct: z.number().nonnegative(), minutes: z.number().int().positive() }),
+  /** USD → stablecoin on-ramp fee, on every stablecoin route. */
+  onramp: z.object({ feePct: z.number().nonnegative() }),
+  /** Flat chain fee per transfer, USD. */
+  networkFeeUsd: z.record(z.string(), z.number().nonnegative()),
 });
 export type FxTable = z.infer<typeof FxTable>;
 

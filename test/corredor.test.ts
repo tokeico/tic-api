@@ -30,7 +30,10 @@ describe("quote", () => {
     const ids = quote(demoInvoice("br"), reference()).map((r) => r.id);
     expect(ids).toEqual(["BR:wire:swift", "BR:usdc-base:br-pagafx", "BR:usdc-base:br-ponte", "BR:usdc-base:br-sol", "BR:usdc-arbitrum:br-sol"]);
     const wire = quote(demoInvoice("br"), reference())[0]!;
-    expect(wire).toMatchObject({ feePct: 4.5, minutes: 2880, feeUsd: 708.33, amountUsd: 15740.74 });
+    expect(wire).toMatchObject({ feePct: 2.5, minutes: 2880, feeUsd: 393.52, amountUsd: 15740.74 });
+    // Stablecoin routes are all-in: off-ramp + 0.10% on-ramp, plus the flat network fee.
+    const ponte = quote(demoInvoice("br"), reference()).find((r) => r.id === "BR:usdc-base:br-ponte")!;
+    expect(ponte).toMatchObject({ feePct: 0.8, feeUsd: 125.98 });
   });
 
   test("VE has only the wire", () => {
@@ -39,11 +42,11 @@ describe("quote", () => {
 
   test("route labels", () => {
     const p = planPayout({ payoutId: "x", invoice: demoInvoice("br"), asOf: "2026-10-31", screening: { status: "clear" } });
-    expect(routeLabel(p.recommended!)).toBe("USDC · Base · Sol VASP · 0.85%");
+    expect(routeLabel(p.recommended!)).toBe("USDC · Base · Sol VASP · 0.95%");
     expect(toPayoutSummary("x", demoInvoice("br"), p)).toEqual({
       id: "x", payeeName: "Estúdio Paulista Design Ltda", country: "BR", amountLocal: 85000, currency: "BRL",
       amountUsd: 15740.74, status: "ready", warnings: 0,
-      recommended: { id: "BR:usdc-base:br-sol", label: "USDC · Base · Sol VASP · 0.85%", feePct: 0.85, minutes: 10 },
+      recommended: { id: "BR:usdc-base:br-sol", label: "USDC · Base · Sol VASP · 0.95%", feePct: 0.95, minutes: 10 },
     });
   });
 });
@@ -121,7 +124,7 @@ describe("mock rail, reconciliation and journal", () => {
       ["Accounts Payable – Estúdio Paulista Design Ltda", 15740.74, 0],
       ["Bank & network fees", 133.8, 0],
       ["FX gain", 0, 0],
-      ["Cash – USDC (Base)", 0, 15874.54],
+      ["Cash – Operating bank (USD)", 0, 15874.54], // pay-through: no stablecoin held
     ]);
   });
 
