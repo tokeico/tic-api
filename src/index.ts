@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ApiError } from "./http-error";
 import { payoutRoutes, planAllRoute } from "./routes/payouts";
 import { referenceRoutes } from "./routes/reference";
+import { ledgerRoutes } from "./routes/ledger";
 
 const app = new Hono();
 
@@ -21,6 +22,7 @@ app.get("/", (c) => {
 app.route("/api/payouts", payoutRoutes);
 app.route("/api/plan-all", planAllRoute);
 app.route("/api", referenceRoutes);
+app.route("/api", ledgerRoutes);
 
 app.notFound((c) => c.json({ error: { code: "not_found", message: `No route for ${c.req.method} ${c.req.path}` } }, 404));
 

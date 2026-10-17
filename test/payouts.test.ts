@@ -223,4 +223,31 @@ suite("payouts API (Postgres)", () => {
     expect(settings.json).toMatchObject({ railMode: "mock", policy: { secondApproverAboveUsd: 50000, dailyCapUsd: 150000 } });
     expect(settings.json.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
+
+  test("ledger, CSV export and the audit endpoints", async () => {
+    const ledger = await get("/api/ledger");
+    expect(ledger.status).toBe(200);
+    const br = (ledger.json as unknown as Json[]).find((e) => e.payoutId === ids.br)!;
+    expect(br).toMatchObject({ payeeName: "Estúdio Paulista Design Ltda", currency: "USD", match: { status: "matched", reason: null } });
+    const debit = br.lines.reduce((n: number, l: Json) => n + l.debit, 0);
+    const credit = br.lines.reduce((n: number, l: Json) => n + l.credit, 0);
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100));
+
+    const csv = await app.request("/api/ledger.csv");
+    expect(csv.headers.get("content-type")).toContain("text/csv");
+    const text = await csv.text();
+    expect(text.split(/\r?\n/)[0]).toBe("JournalNo,JournalDate,AccountName,Debits,Credits,Description,Name,Currency");
+    expect(text).toContain("CORR-0001");
+
+    const events = (await get("/api/audit")).json as unknown as Json[];
+    expect(events.length).toBeGreaterThan(0);
+    expect(events[0]!.seq).toBeGreaterThan(events[events.length - 1]!.seq); // newest first
+    expect((await get("/api/audit/verify")).json).toMatchObject({ ok: true, count: events.length });
+  });
+
+  test("signed checkpoints are append-only too", async () => {
+    const { sql } = await import("drizzle-orm");
+    await expect((async () => dbmod.db.execute(sql`DELETE FROM audit_checkpoints`))()).rejects.toThrow();
+    await expect((async () => dbmod.db.execute(sql`UPDATE audit_checkpoints SET signature = 'x'`))()).rejects.toThrow();
+  });
 });

@@ -246,6 +246,17 @@ export type JournalEntry = z.infer<typeof JournalEntry>;
 export const ReconciliationStatus = z.enum(["matched", "exception"]);
 export type ReconciliationStatus = z.infer<typeof ReconciliationStatus>;
 
+/** GET /api/ledger row: a booked journal entry plus its payee and reconciliation result. */
+export const LedgerEntry = JournalEntry.extend({
+  id: z.string(),
+  payeeName: z.string(),
+  match: z.object({
+    status: ReconciliationStatus,
+    reason: z.string().nullable(), // set when status = exception
+  }),
+});
+export type LedgerEntry = z.infer<typeof LedgerEntry>;
+
 // ---- Audit -------------------------------------------------------------------
 
 export const AuditEventType = z.enum([
