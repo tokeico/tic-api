@@ -102,7 +102,7 @@ suite("payouts API (Postgres)", () => {
   });
 
   test("a blocked payout can't be approved or paid", async () => {
-    expect((await post(`/api/payouts/${ids.ve}/approve`, { approver: "Maria Torres" })).json.error.code).toBe("not_approvable");
+    expect((await post(`/api/payouts/${ids.ve}/approve`, { approver: "Maria Lopez" })).json.error.code).toBe("not_approvable");
     expect((await post(`/api/payouts/${ids.br}/pay`)).json.error.code).toBe("not_approved");
   });
 
@@ -112,22 +112,22 @@ suite("payouts API (Postgres)", () => {
     const setCap = (dailyCapUsd: number) =>
       db.update(schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd } }).where(eq(schema.settings.key, "policy"));
     await setCap(17_000); // Brazil ~$15.7k fits, then Argentina ($4,000) would reach ~$19.7k
-    expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "Maria Torres", comment: "ok" })).status).toBe(200);
-    const ar = await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Torres" });
+    expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "Maria Lopez", comment: "ok" })).status).toBe(200);
+    const ar = await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Lopez" });
     expect(ar.status).toBe(409);
     expect(ar.json.error.code).toBe("daily_cap_exceeded");
     await setCap(150_000);
   });
 
   test("approvals: 2nd approver over $50k, different person, then approved", async () => {
-    const first = await post(`/api/payouts/${ids.mx}/approve`, { approver: "Maria Torres" });
-    expect(first.json).toMatchObject({ status: "awaiting_second_approver", approvals: [{ approver: "Maria Torres", role: "first" }] });
+    const first = await post(`/api/payouts/${ids.mx}/approve`, { approver: "Maria Lopez" });
+    expect(first.json).toMatchObject({ status: "awaiting_second_approver", approvals: [{ approver: "Maria Lopez", role: "first" }] });
     const same = await post(`/api/payouts/${ids.mx}/approve`, { approver: "maria@corredor.demo" });
     expect(same.json.error.code).toBe("same_approver");
-    const second = await post(`/api/payouts/${ids.mx}/approve`, { approver: "Daniel Reyes" });
+    const second = await post(`/api/payouts/${ids.mx}/approve`, { approver: "Daniel Ortiz" });
     expect(second.json).toMatchObject({ status: "approved" });
     expect(second.json.approvals.map((a: Json) => a.role)).toEqual(["first", "second"]);
-    expect((await post(`/api/payouts/${ids.mx}/approve`, { approver: "Daniel Reyes" })).status).toBe(409);
+    expect((await post(`/api/payouts/${ids.mx}/approve`, { approver: "Daniel Ortiz" })).status).toBe(409);
   });
 
   test("an approved payout is frozen: no edits, no re-plan, the slider skips it", async () => {
@@ -184,12 +184,12 @@ suite("payouts API (Postgres)", () => {
     expect(hit.json.plan.screening.status).toBe("hit");
     expect((await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Sam Ortiz", decision: "cleared", note: "x" })).json.error.code).toBe("not_authorized");
     expect((await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Priya Shah", decision: "cleared", note: "x" })).status).toBe(403);
-    const confirmed = await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Daniel Reyes", decision: "confirmed_hit", note: "Matches SDN 26367" });
+    const confirmed = await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Daniel Ortiz", decision: "confirmed_hit", note: "Matches SDN 26367" });
     expect(confirmed.json.status).toBe("blocked");
 
     const back = await call("PATCH", `/api/payouts/${ids.ar}`, { payeeName: "Lucía Fernández", amount: 4000 });
     expect(back.json).toMatchObject({ status: "ready" }); // name changed → screened afresh → clear
-    expect((await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Daniel Reyes", decision: "cleared", note: "x" })).json.error.code).toBe("nothing_to_review");
+    expect((await post(`/api/payouts/${ids.ar}/screening-review`, { reviewer: "Daniel Ortiz", decision: "cleared", note: "x" })).json.error.code).toBe("nothing_to_review");
   });
 
   test("audit chain: every step was logged and the whole chain verifies", async () => {
@@ -252,5 +252,147 @@ suite("payouts API (Postgres)", () => {
     const { sql } = await import("drizzle-orm");
     await expect((async () => dbmod.db.execute(sql`DELETE FROM audit_checkpoints`))()).rejects.toThrow();
     await expect((async () => dbmod.db.execute(sql`UPDATE audit_checkpoints SET signature = 'x'`))()).rejects.toThrow();
+  });
+
+  test("ledger rows carry what the books page shows: invoice, route and references", async () => {
+    const br = ((await get("/api/ledger")).json as unknown as Json[]).find((e) => e.payoutId === ids.br)!;
+    expect(br.invoiceNumber).toBe("EP-2026-0412");
+    expect(br.routeLabel).toMatch(/USDC · Base · /);
+    expect(br.match).toMatchObject({ rail: "pix", txHash: expect.stringMatching(/^0x/), railRef: expect.stringMatching(/^E/) });
+  });
+
+  test("GET /api/payouts?detail=1 returns full rows, each with a template memo", async () => {
+    const { status, json } = await get("/api/payouts?detail=1");
+    expect(status).toBe(200);
+    const rows = json as unknown as Json[];
+    expect(rows).toHaveLength(4);
+    for (const r of rows) {
+      expect(r.plan).not.toBeNull();
+      expect(r.memo.summary).toContain(r.payeeName);
+      expect(r.memo.citedRuleIds.length).toBeGreaterThan(0);
+    }
+    const ve = rows.find((r) => r.id === ids.ve)!;
+    expect(ve.memo.summary).toMatch(/^Do not pay/);
+    expect(ve.memo.routeRationale).toContain("VE-OFAC");
+  });
+
+  test("preview is a dry run: another date's plan, nothing stored", async () => {
+    const before = ((await get("/api/audit")).json as unknown as Json[]).length;
+    const plan = (await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31`)).json;
+    expect(plan).toMatchObject({ asOf: "2026-10-31", recommended: { id: "BR:usdc-base:br-sol" } });
+    expect(((await get("/api/audit")).json as unknown as Json[]).length).toBe(before);
+    expect((await get(`/api/payouts/${ids.br}/preview`)).json.error.code).toBe("invalid_as_of");
+    expect((await get("/api/payouts/nope/preview?asOf=2026-10-31")).status).toBe(404);
+  });
+
+  test("GET /api/rules?all=1 lists the whole pack, not just what is in force", async () => {
+    const all = (await get("/api/rules?all=1")).json as unknown as Json[];
+    const active = (await get("/api/rules?asOf=2026-10-17")).json as unknown as Json[];
+    expect(all.length).toBeGreaterThan(active.length);
+    expect(all.some((r) => r.id === "BR-VASP-AUTH")).toBe(true);
+    expect(active.some((r) => r.id === "BR-VASP-AUTH")).toBe(false); // starts Oct 31
+  });
+
+  test("PUT /api/settings changes the policy, audits it and re-plans open payouts", async () => {
+    // Lucía (AR) is $4,000. With a $3,000 threshold she needs a second approver.
+    const put = (policy: unknown, by?: string) => call("PUT", "/api/settings", { policy, by });
+    expect((await call("PUT", "/api/settings", "{nope")).json.error.code).toBe("invalid_json");
+    expect((await put({ secondApproverAboveUsd: -1, dailyCapUsd: 1 })).json.error.code).toBe("invalid_body");
+    expect((await put({ secondApproverAboveUsd: 3000, dailyCapUsd: 150000 }, "Sam Ortiz")).json.error.code).toBe("not_authorized");
+
+    const res = await put({ secondApproverAboveUsd: 3000, dailyCapUsd: 150000 }, "Maria Lopez");
+    expect(res.json.policy).toEqual({ secondApproverAboveUsd: 3000, dailyCapUsd: 150000 });
+    expect((await get(`/api/payouts/${ids.ar}`)).json.status).toBe("awaiting_second_approver");
+    const events = (await get("/api/audit")).json as unknown as Json[];
+    expect(events.find((e) => e.type === "settings_changed")!.payload).toMatchObject({ setting: "policy", to: { secondApproverAboveUsd: 3000 } });
+
+    await put({ secondApproverAboveUsd: 50000, dailyCapUsd: 150000 }, "Maria Lopez");
+    expect((await get(`/api/payouts/${ids.ar}`)).json.status).toBe("ready");
+    const same = await put({ secondApproverAboveUsd: 50000, dailyCapUsd: 150000 });
+    expect(same.status).toBe(200); // no change: no new event
+  });
+
+  test("tamper simulation breaks verification in memory only", async () => {
+    const clean = (await get("/api/audit/verify")).json;
+    expect(clean.ok).toBe(true);
+    const bad = (await get("/api/audit/verify?tamper=3")).json;
+    expect(bad).toMatchObject({ ok: false, brokenAt: 3 });
+    expect((await get("/api/audit/verify")).json.ok).toBe(true); // nothing was written
+    expect((await get("/api/audit/verify?tamper=abc")).json.error.code).toBe("invalid_tamper");
+  });
+
+  test("health reports the database", async () => {
+    expect((await get("/api/health")).json).toMatchObject({ db: true });
+  });
+
+  test("PUT /api/settings: provider switch, preference and registry update re-plan open payouts and say why", async () => {
+    const put = (body: unknown) => call("PUT", "/api/settings", body);
+    expect((await put({ disabledOfframps: ["nope"] })).json.error.code).toBe("unknown_offramp");
+    expect((await put({ objective: "loudest" })).json.error.code).toBe("invalid_body");
+
+    // Switch off Pampa: Lucía (AR, still open) has no compliant coin route left, so the wire takes over.
+    const off = await put({ disabledOfframps: ["ar-pampa"], by: "Maria Lopez" });
+    expect(off.json.disabledOfframps).toEqual(["ar-pampa"]);
+    expect(off.json.reroutes).toMatchObject([{ payoutId: ids.ar, from: "AR:usdt-tron:ar-pampa", to: "AR:wire:swift" }]);
+    expect((await get(`/api/payouts/${ids.ar}`)).json.recommended.id).toBe("AR:wire:swift");
+    const back = await put({ disabledOfframps: [], by: "Maria Lopez" });
+    expect(back.json.reroutes).toMatchObject([{ payoutId: ids.ar, to: "AR:usdt-tron:ar-pampa" }]);
+
+    // Preference changes are stored and audited; they never pick a blocked route.
+    const fast = await put({ objective: "fastest", by: "Maria Lopez" });
+    expect(fast.json.objective).toBe("fastest");
+    expect((await put({ objective: "fastest" })).json.reroutes).toEqual([]); // unchanged: nothing re-planned
+    await put({ objective: "cheapest", by: "Maria Lopez" });
+
+    // Registry: "what if Ponte were authorized on Oct 31?" is a dry run; approving it makes it real.
+    const hypo = (await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31&registry=br-ponte:vasp_authorized`)).json;
+    expect(hypo.recommended.id).toBe("BR:usdc-base:br-ponte");
+    expect((await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31&registry=br-ponte:nonsense`)).json.error.code).toBe("invalid_registry");
+    expect((await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31`)).json.recommended.id).toBe("BR:usdc-base:br-sol");
+    const reg = await put({ registry: { "br-ponte": "vasp_authorized" }, by: "Daniel Ortiz" });
+    expect(reg.json.registry).toEqual({ "br-ponte": "vasp_authorized" });
+    expect((await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31`)).json.recommended.id).toBe("BR:usdc-base:br-ponte");
+    await put({ registry: {}, by: "Daniel Ortiz" });
+
+    const changes = ((await get("/api/audit")).json as unknown as Json[]).filter((e) => e.type === "settings_changed").map((e) => e.payload.setting);
+    expect(changes).toEqual(expect.arrayContaining(["disabled_offramps", "objective", "registry"]));
+    expect((await get("/api/audit/verify")).json.ok).toBe(true);
+  });
+
+  test("replay proves the plan is deterministic and matches what is on file", async () => {
+    const detail = (await get(`/api/payouts/${ids.ar}`)).json;
+    expect(detail.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    const r = (await get(`/api/payouts/${ids.ar}/replay?n=100`)).json;
+    expect(r).toMatchObject({ n: 100, identical: 100, matchesStored: true, fingerprint: detail.fingerprint });
+    expect(r.ms).toBeGreaterThanOrEqual(0);
+    expect((await get(`/api/payouts/${ids.ar}/replay?n=0`)).json.error.code).toBe("invalid_n");
+    expect((await get("/api/payouts/nope/replay")).status).toBe(404);
+  });
+
+  test("the audit log names who acted, inside the signed payload", async () => {
+    const events = (await get("/api/audit")).json as unknown as Json[];
+    const by = (type: string) => events.filter((e) => e.type === type).map((e) => e.payload.by);
+    expect(by("approved")).toEqual(expect.arrayContaining(["Maria Lopez", "Daniel Ortiz"]));
+    expect(by("settings_changed")).toContain("Maria Lopez");
+    // pay / reconcile / edit accept an optional { by } and record it.
+    const ar = ids.ar;
+    expect((await call("PATCH", `/api/payouts/${ar}`, { description: "Frontend work, September 2026", by: "Sam Ortiz" })).status).toBe(200);
+    expect((await call("PATCH", `/api/payouts/${ar}`, { description: "x", by: "Priya Shah" })).json.error.code).toBe("not_authorized"); // auditors can't edit
+    const edited = ((await get("/api/audit")).json as unknown as Json[]).find((e) => e.type === "edited" && e.payload.by);
+    expect(edited!.payload.by).toBe("Sam Ortiz");
+  });
+
+  test("POST /api/demo/reset wipes back to four draft payouts and a clean chain", async () => {
+    process.env.ALLOW_DEMO_RESET = "0";
+    expect((await post("/api/demo/reset")).json.error.code).toBe("demo_reset_disabled");
+    delete process.env.ALLOW_DEMO_RESET;
+
+    const res = await post("/api/demo/reset");
+    expect(res.status).toBe(200);
+    expect(res.json.payouts.map((p: Json) => p.status)).toEqual(["draft", "draft", "draft", "draft"]);
+    expect(res.json.asOf).toBe("2026-10-17");
+    expect(((await get("/api/audit")).json as unknown as Json[]).length).toBe(0);
+    expect((await get("/api/ledger")).json).toEqual([]);
+    expect((await get("/api/audit/verify")).json).toMatchObject({ ok: true, count: 0 });
   });
 });

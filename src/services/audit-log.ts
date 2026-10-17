@@ -112,12 +112,19 @@ export async function readAuditEvents(q: DbOrTx = db, opts: { payoutId?: string;
   return rows.map(toAuditEvent);
 }
 
-export async function verifyAuditLog(q: DbOrTx = db): Promise<AuditVerifyResult> {
+/**
+ * Recompute the chain. `tamperSeq` edits that event in memory first (nothing
+ * is written: the table is append-only) to show how verification fails.
+ */
+export async function verifyAuditLog(q: DbOrTx = db, opts: { tamperSeq?: number } = {}): Promise<AuditVerifyResult> {
   const k = auditKeys();
-  const [events, cps] = await Promise.all([
+  const [loaded, cps] = await Promise.all([
     readAuditEvents(q),
     q.select().from(schema.auditCheckpoints).orderBy(asc(schema.auditCheckpoints.seq)),
   ]);
+  const events = opts.tamperSeq === undefined
+    ? loaded
+    : loaded.map((e) => (e.seq === opts.tamperSeq ? { ...e, payload: { ...e.payload, tampered: true } } : e));
   const checkpoints: AuditCheckpoint[] = cps.map((c) => ({
     seq: Number(c.seq),
     headMac: c.headMac,

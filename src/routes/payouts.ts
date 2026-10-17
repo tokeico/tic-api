@@ -3,8 +3,8 @@
 // Errors are ApiError → { error: { code, message } } (see index.ts).
 
 import { Hono, type Context } from "hono";
-import type { z } from "zod";
-import { ApproveRequest, InvoicePatch, ScreeningReviewRequest } from "../contracts";
+import { z } from "zod";
+import { ApproveRequest, InvoicePatch, OfframpType, ScreeningReviewRequest } from "../contracts";
 import { isIsoDate } from "../corredor";
 import { ApiError } from "../http-error";
 import * as svc from "../services/payouts";
@@ -34,11 +34,54 @@ function asOfParam(c: Context): string | undefined {
 
 export const payoutRoutes = new Hono();
 
-payoutRoutes.get("/", async (c) => c.json(await svc.listPayouts()));
+// ?detail=1 returns full PayoutDetail rows (plans, memos, approvals...) in one request.
+payoutRoutes.get("/", async (c) => c.json(c.req.query("detail") ? await svc.listPayoutDetails() : await svc.listPayouts()));
 
 payoutRoutes.get("/:id", async (c) => c.json(await svc.getPayout(c.req.param("id"))));
 
-payoutRoutes.patch("/:id", async (c) => c.json(await svc.editInvoice(c.req.param("id"), await body(c, InvoicePatch))));
+const WithBy = z.object({ by: z.string().min(1).optional() }); // who acted (name, email or id), recorded in the audit log
+
+/** Like body(), for endpoints where the body is optional: an empty body means no fields. */
+async function optionalBody<T extends z.ZodType>(c: Context, schema: T): Promise<z.infer<T>> {
+  const text = await c.req.text();
+  if (!text.trim()) return schema.parse({});
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new ApiError(400, "invalid_json", "Request body must be valid JSON.");
+  }
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) throw new ApiError(400, "invalid_body", parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; "));
+  return parsed.data;
+}
+
+payoutRoutes.patch("/:id", async (c) => {
+  const { by, ...patch } = await body(c, InvoicePatch.extend({ by: WithBy.shape.by }));
+  return c.json(await svc.editInvoice(c.req.param("id"), patch, by));
+});
+
+/** GET /api/payouts/:id/preview?asOf=  Dry run: the plan on another date. Stores nothing. */
+payoutRoutes.get("/:id/preview", async (c) => {
+  const asOf = asOfParam(c);
+  if (!asOf) throw new ApiError(400, "invalid_as_of", "asOf is required.");
+  // ?registry=br-ponte:vasp_authorized,... asks "what if this registry update were approved?"
+  const registry: Record<string, OfframpType> = {};
+  for (const pair of (c.req.query("registry") ?? "").split(",").filter(Boolean)) {
+    const [id, type] = pair.split(":");
+    const parsed = OfframpType.safeParse(type);
+    if (!id || !parsed.success) throw new ApiError(400, "invalid_registry", `Bad registry entry "${pair}". Use offrampId:type.`);
+    registry[id] = parsed.data;
+  }
+  return c.json(await svc.previewPlan(c.req.param("id"), asOf, registry));
+});
+
+/** GET /api/payouts/:id/replay?n=100  Recompute the plan n times: the determinism proof. */
+payoutRoutes.get("/:id/replay", async (c) => {
+  const n = Number(c.req.query("n") ?? 100);
+  if (!Number.isInteger(n) || n < 1 || n > 1000) throw new ApiError(400, "invalid_n", "n must be a whole number from 1 to 1000.");
+  return c.json(await svc.replayPlan(c.req.param("id"), n));
+});
 
 payoutRoutes.post("/:id/plan", async (c) => c.json(await svc.planOne(c.req.param("id"), asOfParam(c))));
 
@@ -48,9 +91,9 @@ payoutRoutes.post("/:id/screening-review", async (c) =>
 
 payoutRoutes.post("/:id/approve", async (c) => c.json(await svc.approve(c.req.param("id"), await body(c, ApproveRequest))));
 
-payoutRoutes.post("/:id/pay", async (c) => c.json(await svc.pay(c.req.param("id"))));
+payoutRoutes.post("/:id/pay", async (c) => c.json(await svc.pay(c.req.param("id"), (await optionalBody(c, WithBy)).by)));
 
-payoutRoutes.post("/:id/reconcile", async (c) => c.json(await svc.reconcilePayout(c.req.param("id"))));
+payoutRoutes.post("/:id/reconcile", async (c) => c.json(await svc.reconcilePayout(c.req.param("id"), (await optionalBody(c, WithBy)).by)));
 
 /** POST /api/plan-all?asOf=  The as-of slider. Without asOf it re-plans on the current demo date. */
 export const planAllRoute = new Hono();

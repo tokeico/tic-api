@@ -62,7 +62,7 @@ States: empty ("Drop an invoice or load the demo set"), loading skeletons, API e
 
 | Component | Data | Behavior |
 |---|---|---|
-| `ApprovalPanel` | `approvals[]`, policy | Approve or Reject. Above $50k it shows "1 of 2 approvals" and needs a second, different approver (pick a name from a demo dropdown: Maria Torres / Daniel Reyes, the seeded controller and approver. The API accepts a name, email or id). |
+| `ApprovalPanel` | `approvals[]`, policy | Approve or Reject. Above $50k it shows "1 of 2 approvals" and needs a second, different approver (pick a name from a demo dropdown: Maria Lopez / Daniel Ortiz, the seeded controller and approver. The API accepts a name, email or id). |
 | `PayButton` | status `approved` | `POST /api/payouts/:id/pay`, then shows the transaction hash, off-ramp reference and Pix/SPEI/CVU reference with copy buttons and a "simulated" tag |
 | `ReconcileButton` | status `paid` | `POST /api/payouts/:id/reconcile` → status `booked`, linking to the ledger |
 

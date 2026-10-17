@@ -89,6 +89,7 @@ export const AUDIT_EVENT_TYPES = [
   "paid",
   "reconciled",
   "asof_changed",
+  "settings_changed",
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 

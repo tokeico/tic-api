@@ -269,19 +269,23 @@ export async function chatJSON<T extends z.ZodType>(schema: T, system: string, u
 
 | Method | Route | Does |
 |---|---|---|
-| GET | `/api/payouts` · `/api/payouts/:id` | `PayoutSummary[]` · `PayoutDetail` |
+| GET | `/api/payouts` · `/api/payouts?detail=1` · `/api/payouts/:id` | `PayoutSummary[]` · `PayoutDetail[]` (one request for the whole UI) · `PayoutDetail` (with a template memo and a plan `fingerprint`) |
+| GET | `/api/payouts/:id/preview?asOf=&registry=id:type` | dry run: the plan on another date, optionally with a hypothetical registry update. Stores nothing |
+| GET | `/api/payouts/:id/replay?n=100` | recompute the plan n times → `{ identical, matchesStored, fingerprint, ms }` (determinism proof) |
 | POST | `/api/invoices` | multipart PDF → text → extract → create payout (`draft`) → plan |
 | PATCH | `/api/payouts/:id` | edit invoice fields → re-plan. A failed checksum puts the field back in `lowConfidence`. Approved payouts are frozen (409 `plan_locked`) |
 | POST | `/api/payouts/:id/plan?asOf=` | screen + quote + rules → `Plan`, then memo |
 | POST | `/api/plan-all?asOf=` | re-plan all open payouts → `{ payouts, reroutes }` (the slider calls this) |
 | POST | `/api/payouts/:id/screening-review` | `{ reviewer, decision, note }`: a person clears or confirms a sanctions match (controller / approver only) |
 | POST | `/api/payouts/:id/approve` | `{ approver, decision?, comment? }`; `approver` is a user id, name or email; second approval if over the cap |
-| POST | `/api/payouts/:id/pay` | `RailAdapter.send(recommended)` |
-| POST | `/api/payouts/:id/reconcile` | match → journal entry |
+| POST | `/api/payouts/:id/pay` | `RailAdapter.send(recommended)`; optional `{ by }` names the person in the audit log |
+| POST | `/api/payouts/:id/reconcile` | match → journal entry; optional `{ by }` |
 | GET | `/api/ledger` · `/api/ledger.csv` | journal entries · CSV export |
-| GET | `/api/audit` · `/api/audit/verify` | events · chain and signature check |
-| GET | `/api/rules?asOf=` | active rules |
-| GET/PUT | `/api/settings` | `{ asOf, railMode, policy }` |
+| GET | `/api/audit` · `/api/audit/verify?tamper=` | events · chain and signature check (`tamper=<seq>` edits that event in memory only, for the demo) |
+| GET | `/api/rules?asOf=` · `/api/rules?all=1` | active rules · the whole pack |
+| GET | `/api/offramps` | provider registry with approved registry updates and each provider's on/off switch |
+| GET/PUT | `/api/settings` | `{ asOf, railMode, policy, objective, disabledOfframps, registry }`. PUT takes any subset plus `by`, audits each change (`settings_changed`), re-plans open payouts and returns the reroutes |
+| POST | `/api/demo/reset` | wipe back to the four draft demo invoices (local DBs only; `ALLOW_DEMO_RESET=0` disables it) |
 | GET | `/api/health` | DB, Ollama and model status (for the demo checklist) |
 
 ## 10. Rules engine (`corredor/rules/engine.ts`)

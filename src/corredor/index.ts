@@ -7,7 +7,7 @@
 // extracts invoices and explains plans; it never decides. Route handlers
 // should import from "./corredor" rather than reaching into submodules.
 
-import type { Invoice, Plan, Policy, Reroute } from "../contracts";
+import type { Invoice, Objective, OfframpType, Plan, Policy, Reroute } from "../contracts";
 import { loadReferenceData, type ReferenceData } from "./data";
 import { DEFAULT_POLICY } from "./policy";
 import { quote } from "./quote";
@@ -27,6 +27,7 @@ export * from "./audit";
 export * from "./validate";
 export * from "./present";
 export * from "./demo";
+export * from "./memo";
 export { canonicalJSON, sha256Hex, round2, isIsoDate } from "./util";
 
 // ---- Loaded-once reference data -------------------------------------------------------
@@ -54,6 +55,15 @@ export async function screenPayee(payeeName: string): Promise<ScreeningResult> {
 
 // ---- Planning ------------------------------------------------------------------------
 
+/** Settings that steer the engine. Defaults reproduce the pack as shipped. */
+export interface PlanOptions {
+  objective?: Objective;
+  /** Off-ramp ids a person switched off: they get no routes. */
+  disabledOfframps?: string[];
+  /** Approved provider-registry updates: off-ramp id → new type. */
+  registry?: Record<string, OfframpType>;
+}
+
 export interface PlanPayoutInput {
   payoutId: string;
   invoice: Invoice;
@@ -61,35 +71,41 @@ export interface PlanPayoutInput {
   /** Latest screening for this payee (screen once, store it, reuse it on re-plans). */
   screening: ScreeningInput;
   policy?: Policy;
+  options?: PlanOptions;
 }
 
 /** quote + rules engine with the loaded reference data. Synchronous and pure. */
-export function planPayout({ payoutId, invoice, asOf, screening, policy = DEFAULT_POLICY }: PlanPayoutInput): Plan {
+export function planPayout({ payoutId, invoice, asOf, screening, policy = DEFAULT_POLICY, options = {} }: PlanPayoutInput): Plan {
   const r = reference();
+  const off = new Set(options.disabledOfframps ?? []);
+  const offramps = r.offramps
+    .filter((o) => !off.has(o.id))
+    .map((o) => (options.registry?.[o.id] ? { ...o, type: options.registry[o.id]! } : o));
   return plan({
     payoutId,
     invoice,
     asOf,
     screening,
     policy,
-    routes: quote(invoice, r),
+    objective: options.objective,
+    routes: quote(invoice, { offramps, fx: r.fx }),
     rules: r.rules,
     rulesVersion: r.rulesVersion,
     fx: r.fx,
   });
 }
 
-export interface ReplanItem extends Omit<PlanPayoutInput, "asOf" | "policy"> {
+export interface ReplanItem extends Omit<PlanPayoutInput, "asOf" | "policy" | "options"> {
   /** The payout's current plan, to detect reroutes. */
   previous: Plan | null;
 }
 
 /** Re-plan every open payout on a new as-of date (POST /api/plan-all). */
-export function replanAll(items: ReplanItem[], asOf: string, policy: Policy = DEFAULT_POLICY): { plans: Plan[]; reroutes: Reroute[] } {
+export function replanAll(items: ReplanItem[], asOf: string, policy: Policy = DEFAULT_POLICY, options: PlanOptions = {}): { plans: Plan[]; reroutes: Reroute[] } {
   const plans: Plan[] = [];
   const reroutes: Reroute[] = [];
   for (const item of items) {
-    const next = planPayout({ ...item, asOf, policy });
+    const next = planPayout({ ...item, asOf, policy, options });
     plans.push(next);
     if (item.previous) {
       const change = diffPlans(item.previous, next);

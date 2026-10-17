@@ -221,3 +221,43 @@ describe("rules pack", () => {
     expect(canonicalJSON({ b: 1, a: { d: 2, c: [3, { f: 4, e: 5 }] }, u: undefined })).toBe('{"a":{"c":[3,{"e":5,"f":4}],"d":2},"b":1}');
   });
 });
+
+describe("engine options: routing preference, provider switches, registry updates", () => {
+  const br = (asOf: string, options = {}) =>
+    planPayout({ payoutId: "demo-br", invoice: demoInvoice("br"), asOf, screening: clear, options });
+
+  test("preference picks among compliant routes only", () => {
+    expect(recommendedOfframp(br("2026-10-17"))).toBe("br-ponte"); // cheapest, with a warning
+    expect(recommendedOfframp(br("2026-10-17", { objective: "fastest" }))).toBe("br-sol"); // 10 min vs 20
+    expect(recommendedOfframp(br("2026-10-17", { objective: "safest" }))).toBe("br-sol"); // no warning
+    // PagaFX is the cheapest and fastest-looking route on Oct 17, but it's blocked: no preference can pick it.
+    for (const objective of ["cheapest", "fastest", "safest"] as const) {
+      expect(recommendedOfframp(br("2026-10-17", { objective }))).not.toBe("br-pagafx");
+    }
+    // Before Res. 561 PagaFX is compliant and cheapest.
+    expect(recommendedOfframp(br("2026-09-30"))).toBe("br-pagafx");
+  });
+
+  test("a disabled provider gets no routes, and the next best is chosen", () => {
+    const p = br("2026-10-17", { disabledOfframps: ["br-ponte"] });
+    expect(recommendedOfframp(p)).toBe("br-sol");
+    expect(p.evaluations.some((e) => e.route.offramp?.id === "br-ponte")).toBe(false);
+    // Disable every Brazilian provider: the wire is the fallback.
+    const wire = br("2026-10-17", { disabledOfframps: ["br-pagafx", "br-ponte", "br-sol"] });
+    expect(wire.recommended?.kind).toBe("wire");
+  });
+
+  test("an approved registry update lifts the Oct 31 block, so Brazil doesn't reroute", () => {
+    const registry = { "br-ponte": "vasp_authorized" as const };
+    expect(recommendedOfframp(br("2026-10-31"))).toBe("br-sol");
+    expect(recommendedOfframp(br("2026-10-31", { registry }))).toBe("br-ponte");
+    // And the "hasn't filed" warning goes away while it still applied.
+    expect(warningCount(br("2026-10-17"))).toBe(1);
+    expect(warningCount(br("2026-10-17", { registry }))).toBe(0);
+  });
+
+  test("same inputs and options always give the same plan", () => {
+    const opts = { objective: "fastest" as const, disabledOfframps: ["br-pagafx"] };
+    expect(canonicalJSON(br("2026-10-17", opts))).toBe(canonicalJSON(br("2026-10-17", opts)));
+  });
+});

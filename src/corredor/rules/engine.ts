@@ -7,6 +7,7 @@
 
 import type {
   Invoice,
+  Objective,
   Plan,
   PayoutStatus,
   Policy,
@@ -38,6 +39,8 @@ export interface PlanInput {
   rulesVersion: string;
   fx: FxTable;
   policy: Policy;
+  /** Routing preference among compliant routes (default cheapest). */
+  objective?: Objective;
 }
 
 // ---- Rule selection -----------------------------------------------------------
@@ -95,10 +98,22 @@ export function rankEvaluations(evals: RouteEvaluation[]): RouteEvaluation[] {
   return [...evals].sort((a, b) => Number(b.compliant) - Number(a.compliant) || compareCost(a.route, b.route));
 }
 
-/** Cheapest compliant stablecoin route, else the wire if compliant, else null. */
-export function pickRecommended(ranked: RouteEvaluation[]): RouteEvaluation | null {
+const warnCount = (e: RouteEvaluation): number => e.results.filter((r) => r.outcome === "warn").length;
+
+/**
+ * Among compliant routes, a stablecoin route if there is one (the wire is the
+ * fallback), chosen by the routing preference. `ranked` is already cheapest
+ * first, so "cheapest" is the first one. The preference never sees a blocked route.
+ */
+export function pickRecommended(ranked: RouteEvaluation[], objective: Objective = "cheapest"): RouteEvaluation | null {
   const compliant = ranked.filter((e) => e.compliant);
-  return compliant.find((e) => e.route.kind === "stablecoin") ?? compliant.find((e) => e.route.kind === "wire") ?? null;
+  const coins = compliant.filter((e) => e.route.kind === "stablecoin");
+  if (coins.length > 0) {
+    if (objective === "fastest") return [...coins].sort((a, b) => a.route.minutes - b.route.minutes || compareCost(a.route, b.route))[0]!;
+    if (objective === "safest") return [...coins].sort((a, b) => warnCount(a) - warnCount(b) || compareCost(a.route, b.route))[0]!;
+    return coins[0]!;
+  }
+  return compliant.find((e) => e.route.kind === "wire") ?? null;
 }
 
 // ---- Plan ----------------------------------------------------------------------
@@ -111,7 +126,7 @@ export function plan(input: PlanInput): Plan {
 
   const rules = activeRules(input.rules, asOf, invoice.payeeCountry);
   const evaluations = rankEvaluations(routes.map((route) => evaluateRoute(route, invoice, rules, fx)));
-  const best = pickRecommended(evaluations);
+  const best = pickRecommended(evaluations, input.objective);
   const recommended = best?.route ?? null;
   const amountUsd = routes[0]?.amountUsd ?? 0;
 

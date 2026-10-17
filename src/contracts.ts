@@ -78,6 +78,12 @@ export const Offramp = z.object({
 });
 export type Offramp = z.infer<typeof Offramp>;
 
+/** GET /api/offramps row: a provider from the registry, as it stands after approved registry updates. */
+export const OfframpListing = Offramp.extend({
+  enabled: z.boolean(), // false when a person switched it off in Customize
+});
+export type OfframpListing = z.infer<typeof OfframpListing>;
+
 export const Route = z.object({
   id: z.string(), // e.g. "BR:usdc-base:br-sol", "BR:wire:swift"
   kind: z.enum(["wire", "stablecoin"]),
@@ -251,9 +257,14 @@ export type ReconciliationStatus = z.infer<typeof ReconciliationStatus>;
 export const LedgerEntry = JournalEntry.extend({
   id: z.string(),
   payeeName: z.string(),
+  invoiceNumber: z.string(),
+  routeLabel: z.string(), // "USDC · Base · Sol VASP · 0.85%"
   match: z.object({
     status: ReconciliationStatus,
     reason: z.string().nullable(), // set when status = exception
+    txHash: z.string().nullable(), // what the invoice was matched to...
+    railRef: z.string().nullable(), // ...on-chain, and on the local rail
+    rail: LocalRail,
   }),
 });
 export type LedgerEntry = z.infer<typeof LedgerEntry>;
@@ -272,6 +283,7 @@ export const AuditEventType = z.enum([
   "paid",
   "reconciled",
   "asof_changed",
+  "settings_changed",
 ]);
 export type AuditEventType = z.infer<typeof AuditEventType>;
 
@@ -324,6 +336,8 @@ export const PayoutDetail = PayoutSummary.extend({
   plan: Plan.nullable(), // null while status = draft
   memo: Memo.nullable(),
   approvals: z.array(z.object({ approver: z.string(), role: z.enum(["first", "second"]), at: z.string() })),
+  /** First 16 hex chars of the plan's sha256: same inputs and date always give the same one. */
+  fingerprint: z.string().nullable().optional(),
   payment: z
     .object({
       txHash: z.string().nullable(),
@@ -336,18 +350,49 @@ export const PayoutDetail = PayoutSummary.extend({
 });
 export type PayoutDetail = z.infer<typeof PayoutDetail>;
 
+/** GET /api/payouts/:id/replay: recompute the plan n times and compare. */
+export const ReplayResult = z.object({
+  n: z.number().int(),
+  identical: z.number().int(), // how many recomputations matched the first byte for byte
+  matchesStored: z.boolean(), // and whether that equals the plan on file
+  fingerprint: z.string(),
+  ms: z.number(),
+});
+export type ReplayResult = z.infer<typeof ReplayResult>;
+
 export const PlanAllResponse = z.object({
   payouts: z.array(PayoutSummary),
   reroutes: z.array(Reroute),
 });
 export type PlanAllResponse = z.infer<typeof PlanAllResponse>;
 
+/** How the engine picks among routes that pass every rule. It can never pick a blocked one. */
+export const Objective = z.enum(["cheapest", "fastest", "safest"]);
+export type Objective = z.infer<typeof Objective>;
+
 export const Settings = z.object({
   asOf: IsoDate,
   railMode: RailMode,
   policy: Policy,
+  objective: Objective,
+  disabledOfframps: z.array(z.string()), // off-ramp ids switched off by a person
+  registry: z.record(z.string(), OfframpType), // provider-registry updates a person approved, by off-ramp id
 });
 export type Settings = z.infer<typeof Settings>;
+
+/** PUT /api/settings. Every field is optional; each one that changes is written to the audit log. */
+export const SettingsPatch = z.object({
+  policy: Policy.optional(),
+  objective: Objective.optional(),
+  disabledOfframps: z.array(z.string()).optional(),
+  registry: z.record(z.string(), OfframpType).optional(),
+  by: z.string().min(1).optional(), // user id, name or email (controller / approver), recorded in the audit log
+});
+export type SettingsPatch = z.infer<typeof SettingsPatch>;
+
+/** PUT /api/settings response: the new settings plus any reroutes they caused. */
+export const SettingsUpdate = Settings.extend({ reroutes: z.array(Reroute) });
+export type SettingsUpdate = z.infer<typeof SettingsUpdate>;
 
 export const Health = z.object({
   db: z.boolean(),

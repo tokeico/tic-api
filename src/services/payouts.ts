@@ -16,6 +16,7 @@ import {
   Invoice,
   type InvoicePatch,
   type Memo,
+  type OfframpType,
   type PayoutDetail,
   type PayoutStatus,
   type PayoutSummary,
@@ -23,6 +24,7 @@ import {
   type Policy,
   type Reroute,
   type ApproveRequest,
+  type ReplayResult,
   type ScreeningReviewRequest,
 } from "../contracts";
 import {
@@ -36,6 +38,7 @@ import {
   rateFor,
   reconcile,
   reference,
+  templateMemo,
   screenPayee,
   toPayoutSummary,
   validateInvoice,
@@ -47,7 +50,8 @@ import {
 import { db, schema } from "../db";
 import { ApiError, notFound } from "../http-error";
 import { appendAudit } from "./audit-log";
-import { getDemoAsOf, getSettings, setDemoAsOf } from "./settings";
+import { getDemoAsOf, getSettings, planOptions, setDemoAsOf } from "./settings";
+import type { Settings, SettingsPatch, SettingsUpdate } from "../contracts";
 import type { DbOrTx, Tx } from "./tx";
 
 const { payouts, plans, screenings, approvals, payments, reconciliations, journalEntries, journalLines, users } = schema;
@@ -56,6 +60,7 @@ const { payouts, plans, screenings, approvals, payments, reconciliations, journa
 const REPLANNABLE: PayoutStatus[] = ["draft", "needs_info", "blocked", "awaiting_second_approver", "ready"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const APPROVER_ROLES = ["controller", "approver"] as const;
+const EDITOR_ROLES = ["controller", "approver", "ap_clerk"] as const;
 
 export const isUuid = (s: string) => UUID.test(s);
 
@@ -116,7 +121,12 @@ function toDetail(p: FullPayout): PayoutDetail {
     ...toSummary(p),
     invoice: rowToInvoice(p.invoice!),
     plan: planRow?.plan ?? null,
-    memo: planRow ? toMemo(planRow.memos) : null,
+    fingerprint: planRow ? planRow.planHash.slice(0, 16) : null,
+    // A stored (model-written) memo wins; otherwise the deterministic template, built from the plan.
+    memo: planRow
+      ? (toMemo(planRow.memos) ??
+        templateMemo({ invoice: rowToInvoice(p.invoice!), plan: planRow.plan, amountUsd: p.amountUsd ?? planRow.plan.evaluations[0]?.route.amountUsd ?? 0 }))
+      : null,
     approvals: p.approvals
       .filter((a) => a.decision === "approved")
       .map((a) => ({ approver: a.approver.name, role: a.role, at: a.createdAt.toISOString() })),
@@ -150,6 +160,78 @@ export async function listPayouts(q: DbOrTx = db): Promise<PayoutSummary[]> {
     with: { invoice: true, plans: { orderBy: [desc(plans.createdAt)], limit: 1 } },
   });
   return rows.map(toSummary);
+}
+
+export async function listPayoutDetails(q: DbOrTx = db): Promise<PayoutDetail[]> {
+  const rows = await q.query.payouts.findMany({
+    orderBy: [asc(payouts.createdAt), asc(payouts.id)],
+    with: {
+      invoice: true,
+      plans: { orderBy: [desc(plans.createdAt)], limit: 1, with: { memos: true } },
+      approvals: { orderBy: [asc(approvals.createdAt)], with: { approver: true } },
+      payments: { orderBy: [desc(payments.createdAt)], with: { reconciliation: true } },
+      journalEntries: { with: { lines: true } },
+    },
+  });
+  return rows.map((r) => toDetail(r as FullPayout));
+}
+
+/** Everything the engine needs for one payout, read once. */
+async function planContext(id: string) {
+  if (!isUuid(id)) throw notFound();
+  const payout = await db.query.payouts.findFirst({ where: eq(payouts.id, id), with: { invoice: true } });
+  if (!payout?.invoice) throw notFound();
+  const invoice = rowToInvoice(payout.invoice);
+  const latest = await db.query.screenings.findFirst({ where: eq(screenings.payoutId, id), orderBy: [desc(screenings.createdAt)] });
+  const screening: ScreeningInput =
+    latest && latest.payeeName === invoice.payeeName
+      ? {
+          status: latest.status,
+          ...(latest.matchedName ? { match: latest.matchedName } : {}),
+          ...(latest.score !== null ? { score: latest.score } : {}),
+          reviewDecision: latest.reviewDecision,
+        }
+      : await screenPayee(invoice.payeeName).then((r) => ({
+          status: r.status,
+          ...(r.match ? { match: r.match } : {}),
+          ...(r.score !== undefined ? { score: r.score } : {}),
+        }));
+  return { invoice, screening, settings: await getSettings(db) };
+}
+
+function enginePlan(id: string, ctx: Awaited<ReturnType<typeof planContext>>, asOf: string, hypothetical: Record<string, OfframpType> = {}): Plan {
+  // `hypothetical` lets the radar ask "what if this registry update were approved?".
+  const options = { ...planOptions(ctx.settings), registry: { ...ctx.settings.registry, ...hypothetical } };
+  try {
+    return planPayout({ payoutId: id, invoice: ctx.invoice, asOf, screening: ctx.screening, policy: ctx.settings.policy, options });
+  } catch (err) {
+    if (err instanceof UnknownCurrencyError) throw new ApiError(422, "unsupported_currency", err.message);
+    throw err;
+  }
+}
+
+/**
+ * What would this payout's plan be on another date? Nothing is stored and
+ * nothing is audited: this backs "what changes on Oct 31?" (dry run).
+ */
+export async function previewPlan(id: string, asOf: string, hypothetical: Record<string, OfframpType> = {}): Promise<Plan> {
+  return enginePlan(id, await planContext(id), asOf, hypothetical);
+}
+
+/** GET /api/payouts/:id/replay: the determinism proof ("Replay 100×"). Reads only. */
+export async function replayPlan(id: string, n: number): Promise<ReplayResult> {
+  const ctx = await planContext(id);
+  const stored = await db.query.plans.findFirst({ where: eq(plans.payoutId, id), orderBy: [desc(plans.createdAt)] });
+  if (!stored) throw new ApiError(409, "no_plan", "This payout hasn't been planned yet.");
+  const t0 = performance.now();
+  let first = "";
+  let identical = 0;
+  for (let i = 0; i < n; i++) {
+    const hash = planHash(enginePlan(id, ctx, stored.asOf));
+    if (i === 0) first = hash;
+    if (hash === first) identical++;
+  }
+  return { n, identical, matchesStored: first === stored.planHash, fingerprint: first.slice(0, 16), ms: Math.round((performance.now() - t0) * 10) / 10 };
 }
 
 export async function getPayout(id: string, q: DbOrTx = db): Promise<PayoutDetail> {
@@ -232,7 +314,7 @@ interface Planned {
 }
 
 /** Run the engine for one payout and store the result. The caller holds the lock. */
-async function planAndStore(tx: Tx, payout: typeof payouts.$inferSelect, asOf: string, policy: Policy, actorId: string | null): Promise<Planned> {
+async function planAndStore(tx: Tx, payout: typeof payouts.$inferSelect, asOf: string, settings: Settings, actorId: string | null): Promise<Planned> {
   const invoiceRow = await tx.query.invoices.findFirst({ where: eq(schema.invoices.id, payout.invoiceId) });
   if (!invoiceRow) throw new Error(`payout ${payout.id} has no invoice`);
   const invoice = rowToInvoice(invoiceRow);
@@ -240,7 +322,7 @@ async function planAndStore(tx: Tx, payout: typeof payouts.$inferSelect, asOf: s
   const screening = await screeningFor(tx, payout.id, invoice, actorId);
   let plan: Plan;
   try {
-    plan = planPayout({ payoutId: payout.id, invoice, asOf, screening, policy });
+    plan = planPayout({ payoutId: payout.id, invoice, asOf, screening, policy: settings.policy, options: planOptions(settings) });
   } catch (err) {
     if (err instanceof UnknownCurrencyError) throw new ApiError(422, "unsupported_currency", err.message);
     throw err;
@@ -295,7 +377,7 @@ export async function planOne(id: string, asOfParam?: string): Promise<PayoutDet
     const payout = await lock(tx, id);
     await assertReplannable(tx, payout, "re-planned");
     const settings = await getSettings(tx);
-    await planAndStore(tx, payout, asOfParam ?? payout.asOf ?? settings.asOf, settings.policy, null);
+    await planAndStore(tx, payout, asOfParam ?? payout.asOf ?? settings.asOf, settings, null);
   });
   return getPayout(id);
 }
@@ -316,7 +398,7 @@ export async function planAll(asOf: string): Promise<{ payouts: PayoutSummary[];
         if (err instanceof ApiError && err.code === "plan_locked") continue; // decided: leave as is
         throw err;
       }
-      const { plan, previous } = await planAndStore(tx, payout, asOf, settings.policy, null);
+      const { plan, previous } = await planAndStore(tx, payout, asOf, settings, null);
       replanned++;
       const change = previous ? diffPlans(previous, plan) : null;
       if (change) reroutes.push(change);
@@ -330,10 +412,11 @@ export async function planAll(asOf: string): Promise<{ payouts: PayoutSummary[];
 }
 
 /** PATCH /api/payouts/:id */
-export async function editInvoice(id: string, patch: InvoicePatch): Promise<PayoutDetail> {
+export async function editInvoice(id: string, patch: InvoicePatch, by?: string): Promise<PayoutDetail> {
   await db.transaction(async (tx) => {
     const payout = await lock(tx, id);
     await assertReplannable(tx, payout, "edited");
+    const actor = by ? await resolveUser(tx, by, EDITOR_ROLES, "edit invoices") : null;
     const row = await tx.query.invoices.findFirst({ where: eq(schema.invoices.id, payout.invoiceId) });
     if (!row) throw new Error(`payout ${id} has no invoice`);
 
@@ -367,10 +450,10 @@ export async function editInvoice(id: string, patch: InvoicePatch): Promise<Payo
       })
       .where(eq(schema.invoices.id, row.id));
     // Field names only: bank and tax ids don't belong in an immutable log.
-    await appendAudit(tx, { payoutId: id, type: "edited", payload: { fields: edited, issues: issues.map((i) => i.field) } });
+    await appendAudit(tx, { payoutId: id, actorId: actor?.id ?? null, type: "edited", payload: { fields: edited, issues: issues.map((i) => i.field), ...(actor ? { by: actor.name } : {}) } });
 
     const settings = await getSettings(tx);
-    await planAndStore(tx, payout, payout.asOf ?? settings.asOf, settings.policy, null);
+    await planAndStore(tx, payout, payout.asOf ?? settings.asOf, settings, null);
   });
   return getPayout(id);
 }
@@ -395,10 +478,10 @@ export async function reviewScreening(id: string, req: ScreeningReviewRequest): 
       payoutId: id,
       actorId: reviewer.id,
       type: "screening_reviewed",
-      payload: { decision: req.decision, screeningStatus: latest.status, match: latest.matchedName },
+      payload: { decision: req.decision, screeningStatus: latest.status, match: latest.matchedName, by: reviewer.name },
     });
     const settings = await getSettings(tx);
-    await planAndStore(tx, payout, payout.asOf ?? settings.asOf, settings.policy, reviewer.id);
+    await planAndStore(tx, payout, payout.asOf ?? settings.asOf, settings, reviewer.id);
   });
   return getPayout(id);
 }
@@ -463,7 +546,7 @@ export async function approve(id: string, req: ApproveRequest): Promise<PayoutDe
         payoutId: id,
         actorId: approver.id,
         type: req.decision === "approved" ? "approved" : "rejected",
-        payload: { planId: planRow.id, role: decision.role, nextStatus: decision.nextStatus, amountUsd, comment: req.comment ?? null },
+        payload: { planId: planRow.id, role: decision.role, nextStatus: decision.nextStatus, amountUsd, comment: req.comment ?? null, by: approver.name },
       });
     });
   } catch (err) {
@@ -491,10 +574,11 @@ function mapUniqueViolation(err: unknown): unknown {
  * the payout stays "approved". If it succeeds but the commit fails, a retry is
  * safe on real rails because the payout id is the idempotency key.
  */
-export async function pay(id: string): Promise<PayoutDetail> {
+export async function pay(id: string, by?: string): Promise<PayoutDetail> {
   try {
     await db.transaction(async (tx) => {
       const payout = await lock(tx, id);
+      const actor = by ? await resolveUser(tx, by, APPROVER_ROLES, "send payments") : null;
       if (payout.status !== "approved") {
         throw new ApiError(409, "not_approved", `A payout in status "${payout.status}" can't be paid. It must be approved first.`);
       }
@@ -540,8 +624,10 @@ export async function pay(id: string): Promise<PayoutDetail> {
       await tx.update(payouts).set({ status: "paid", paidAt: new Date() }).where(eq(payouts.id, id));
       await appendAudit(tx, {
         payoutId: id,
+        actorId: actor?.id ?? null,
         type: "paid",
         payload: {
+          ...(actor ? { by: actor.name } : {}),
           paymentId: payment!.id,
           routeId: route.id,
           railMode: mode,
@@ -561,10 +647,11 @@ export async function pay(id: string): Promise<PayoutDetail> {
 // ---- Reconciliation and booking -------------------------------------------------------
 
 /** POST /api/payouts/:id/reconcile. A mismatch is recorded and reported as a 409; fix it and call again. */
-export async function reconcilePayout(id: string): Promise<PayoutDetail> {
+export async function reconcilePayout(id: string, by?: string): Promise<PayoutDetail> {
   let exception: string | null = null;
   await db.transaction(async (tx) => {
     const payout = await lock(tx, id);
+    const actor = by ? await resolveUser(tx, by, APPROVER_ROLES, "reconcile payments") : null;
     if (payout.status !== "paid") {
       throw new ApiError(409, "not_paid", `A payout in status "${payout.status}" can't be reconciled. It must be paid first.`);
     }
@@ -606,7 +693,7 @@ export async function reconcilePayout(id: string): Promise<PayoutDetail> {
 
     if (result.status === "exception" || payment.settledLocal === null || payment.settleRate === null) {
       exception = result.reason ?? "Settlement data is missing.";
-      await appendAudit(tx, { payoutId: id, type: "reconciled", payload: { status: "exception", reasons: result.reasons, paymentId: payment.id } });
+      await appendAudit(tx, { payoutId: id, actorId: actor?.id ?? null, type: "reconciled", payload: { status: "exception", reasons: result.reasons, paymentId: payment.id, ...(actor ? { by: actor.name } : {}) } });
       return; // stays "paid"; the exception row is kept
     }
 
@@ -643,10 +730,55 @@ export async function reconcilePayout(id: string): Promise<PayoutDetail> {
     await tx.update(payouts).set({ status: "booked", bookedAt: new Date() }).where(eq(payouts.id, id));
     await appendAudit(tx, {
       payoutId: id,
+      actorId: actor?.id ?? null,
       type: "reconciled",
-      payload: { status: "matched", paymentId: payment.id, reconciliationId: rec!.id, journalEntryId: header!.id },
+      payload: { status: "matched", paymentId: payment.id, reconciliationId: rec!.id, journalEntryId: header!.id, ...(actor ? { by: actor.name } : {}) },
     });
   });
   if (exception) throw new ApiError(409, "reconciliation_exception", exception);
   return getPayout(id);
+}
+
+// ---- Settings ---------------------------------------------------------------------
+
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * PUT /api/settings. Each field that actually changes is stored and written to
+ * the audit log (one `settings_changed` event per setting), then every open
+ * payout is re-planned so statuses and routes follow ("ready" becomes
+ * "awaiting second approver" when the threshold drops below the amount, a
+ * disabled provider loses its routes, an approved registry update can lift a
+ * block). Payouts that already have an approval are frozen and keep their plan.
+ * The reroutes the change caused come back so the UI can say why.
+ */
+export async function updateSettings(patch: SettingsPatch): Promise<SettingsUpdate> {
+  const known = new Set(reference().offramps.map((o) => o.id));
+  for (const id of [...(patch.disabledOfframps ?? []), ...Object.keys(patch.registry ?? {})]) {
+    if (!known.has(id)) throw new ApiError(400, "unknown_offramp", `No off-ramp "${id}" in the registry.`);
+  }
+
+  const changed = await db.transaction(async (tx) => {
+    const actor = patch.by ? await resolveUser(tx, patch.by, APPROVER_ROLES, "change settings") : null;
+    const current = await getSettings(tx);
+    const changes: { key: string; setting: string; from: unknown; to: unknown }[] = [];
+    if (patch.policy && !sameJson(patch.policy, current.policy)) changes.push({ key: "policy", setting: "policy", from: current.policy, to: patch.policy });
+    if (patch.objective && patch.objective !== current.objective) changes.push({ key: "objective", setting: "objective", from: current.objective, to: patch.objective });
+    if (patch.disabledOfframps) {
+      const next = [...new Set(patch.disabledOfframps)].sort();
+      if (!sameJson(next, [...current.disabledOfframps].sort())) changes.push({ key: "disabled_offramps", setting: "disabled_offramps", from: current.disabledOfframps, to: next });
+    }
+    if (patch.registry && !sameJson(patch.registry, current.registry)) changes.push({ key: "registry", setting: "registry", from: current.registry, to: patch.registry });
+
+    for (const c of changes) {
+      await tx
+        .insert(schema.settings)
+        .values({ key: c.key, value: c.to })
+        .onConflictDoUpdate({ target: schema.settings.key, set: { value: c.to } });
+      await appendAudit(tx, { payoutId: null, actorId: actor?.id ?? null, type: "settings_changed", payload: { setting: c.setting, from: c.from, to: c.to, ...(actor ? { by: actor.name } : {}) } });
+    }
+    return changes.length > 0;
+  });
+  const reroutes = changed ? (await planAll(await getDemoAsOf(db))).reroutes : [];
+  return { ...(await getSettings(db)), reroutes };
 }

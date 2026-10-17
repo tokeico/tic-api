@@ -4,6 +4,7 @@
 // GET /api/audit/verify  every MAC and checkpoint signature → AuditVerifyResult
 
 import { Hono } from "hono";
+import { ApiError } from "../http-error";
 import { readAuditEvents, verifyAuditLog } from "../services/audit-log";
 import { ledgerCsv, listLedger } from "../services/ledger";
 
@@ -20,4 +21,11 @@ ledgerRoutes.get("/ledger.csv", async (c) =>
 
 ledgerRoutes.get("/audit", async (c) => c.json(await readAuditEvents(undefined, { newestFirst: true })));
 
-ledgerRoutes.get("/audit/verify", async (c) => c.json(await verifyAuditLog()));
+// ?tamper=<seq> edits that event in memory before verifying (nothing is written): the audit-page demo.
+ledgerRoutes.get("/audit/verify", async (c) => {
+  const raw = c.req.query("tamper");
+  if (raw === undefined) return c.json(await verifyAuditLog());
+  const seq = Number(raw);
+  if (!Number.isInteger(seq) || seq < 1) throw new ApiError(400, "invalid_tamper", "tamper must be an event number.");
+  return c.json(await verifyAuditLog(undefined, { tamperSeq: seq }));
+});

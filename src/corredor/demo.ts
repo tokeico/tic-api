@@ -41,7 +41,7 @@ export const DEMO_INVOICES: DemoInvoice[] = [
     bankId: { type: "spei", value: "012580001234567897" }, // CLABE
     description: "Brake assemblies, PO 4471 (800 units)",
     purposeCode: null,
-    lowConfidence: [],
+    lowConfidence: ["bankId"], // the CLABE was read with low confidence: a person should check it
   },
   {
     // Ready + AR-FX-SPREAD warning. Pampa PSAV (Cueva P2P is blocked).
