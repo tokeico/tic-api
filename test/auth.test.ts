@@ -117,6 +117,17 @@ suite("database authentication and workspace isolation", () => {
     cookie = signedIn.cookie;
   });
 
+  test("expired sessions, missing origins and exhausted login quotas are rejected", async () => {
+    const extra = await call("/api/auth/signin", { method: "POST", body: { email: owner.email, password } });
+    await database.adminDb.update(database.schema.authSessions).set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(database.schema.authSessions.tokenHash, security.tokenHash(extra.cookie.split("=")[1]!)));
+    expect((await call("/api/auth/me", { cookie: extra.cookie })).status).toBe(401);
+    expect((await app.request("/api/plan-all", { method: "POST", headers: { cookie } })).status).toBe(403);
+    const email = `limited-${suffix}@example.test`;
+    for (let i = 0; i < 10; i++) expect((await call("/api/auth/signin", { method: "POST", body: { email, password: "wrong password" } })).status).toBe(401);
+    expect((await call("/api/auth/signin", { method: "POST", body: { email, password: "wrong password" } })).status).toBe(429);
+  });
+
   test("cookie writes reject cross-origin requests and the server records the real actor", async () => {
     expect((await call("/api/plan-all", { method: "POST", cookie, origin: "https://untrusted.example.test" })).status).toBe(403);
     expect((await call("/api/plan-all?asOf=2026-10-17", { method: "POST", cookie })).status).toBe(200);
@@ -172,6 +183,28 @@ suite("database authentication and workspace isolation", () => {
     expect(JSON.parse(own.body.result.content[0].text).id).toBe(ownPayouts[0]!.id);
     const denied = await rpc("tools/call", { name: "get_payout", arguments: { id: otherPayouts[0]!.id } });
     expect(denied.body.result.isError).toBe(true);
+    expect((await call("/mcp", { method: "POST", key: apiKey, origin: "https://untrusted.example.test", body: { jsonrpc: "2.0", id: 1, method: "tools/list" } })).status).toBe(403);
+  });
+
+  test("existing users can accept an invitation and switch only to their memberships", async () => {
+    const invitation = await call("/api/auth/invitations", { method: "POST", cookie, body: { email: other.email, role: "auditor" } });
+    expect(invitation.status).toBe(201);
+    const joined = await call("/api/auth/signin", { method: "POST", body: { email: other.email, password, invitation: invitation.body.invitation } });
+    expect(joined.status).toBe(200);
+    expect(joined.body.user.workspace.id).toBe(ownerUser.workspace.id);
+    expect(joined.body.user.role).toBe("auditor");
+    expect((await call("/api/plan-all", { method: "POST", cookie: joined.cookie })).status).toBe(403);
+    const workspaces = await call("/api/auth/workspaces", { cookie: joined.cookie });
+    expect(workspaces.body.length).toBe(2);
+    const original = workspaces.body.find((w: Record<string, any>) => w.owner);
+    expect((await call("/api/auth/workspace", { method: "POST", cookie, body: { workspaceId: original.id } })).status).toBe(404);
+    expect((await call("/api/auth/workspace", { method: "POST", key: apiKey, body: { workspaceId: ownerUser.workspace.id } })).status).toBe(403);
+    const switched = await call("/api/auth/workspace", { method: "POST", cookie: joined.cookie, body: { workspaceId: original.id } });
+    expect(switched.status).toBe(200);
+    expect(switched.body.user.workspace.id).toBe(original.id);
+    expect(switched.body.user.role).toBe("controller");
+    expect((await call("/api/auth/me", { cookie: joined.cookie })).status).toBe(401);
+    expect((await call("/api/payouts", { cookie: switched.cookie })).body.map((p: Record<string, any>) => p.id)).toEqual(otherPayouts.map((p) => p.id));
   });
 
   test("revoking a key and signing out invalidate the stored credentials", async () => {

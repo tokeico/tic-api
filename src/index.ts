@@ -18,22 +18,34 @@ import { handleMcp } from "./mcp";
 const app = new Hono();
 
 app.use("/api/*", async (c, next) => {
-  await next();
-  if ((process.env.RAIL_MODE ?? "mock") !== "mock" || !c.res.headers.get("content-type")?.includes("application/json")) return;
-  const data = await c.res.clone().json();
-  const headers = new Headers(c.res.headers);
-  headers.delete("content-length");
-  c.res = new Response(JSON.stringify(demoPresentation(data)), { status: c.res.status, headers });
+    await next();
+    if (
+        (process.env.RAIL_MODE ?? "mock") !== "mock" ||
+        !c.res.headers.get("content-type")?.includes("application/json")
+    )
+        return;
+    const data = await c.res.clone().json();
+    const headers = new Headers(c.res.headers);
+    headers.delete("content-length");
+    c.res = new Response(JSON.stringify(demoPresentation(data)), {
+        status: c.res.status,
+        headers,
+    });
 });
 
 app.use(
-  "*",
-  cors({
-    origin: WEB_ORIGIN,
-    credentials: true,
-    allowHeaders: ["Content-Type", "Authorization", "MCP-Protocol-Version", "Mcp-Session-Id"],
-    exposeHeaders: ["MCP-Protocol-Version", "Mcp-Session-Id"],
-  }),
+    "*",
+    cors({
+        origin: WEB_ORIGIN,
+        credentials: true,
+        allowHeaders: [
+            "Content-Type",
+            "Authorization",
+            "MCP-Protocol-Version",
+            "Mcp-Session-Id",
+        ],
+        exposeHeaders: ["MCP-Protocol-Version", "Mcp-Session-Id"],
+    }),
 );
 
 app.use("/api/auth/*", bodyLimit({ maxSize: 16 * 1024 }));
@@ -44,7 +56,7 @@ app.use("/mcp", requireWorkspace);
 app.all("/mcp", (c) => handleMcp(c.req.raw));
 
 app.get("/", (c) => {
-  return c.text("Hello Hono!");
+    return c.text("Hello Hono!");
 });
 
 app.route("/api/payouts", payoutRoutes);
@@ -56,20 +68,45 @@ app.route("/api/demo", demoRoutes);
 app.route("/api/agent", agentRoutes);
 app.route("/api/invoices", invoiceRoutes);
 
-app.notFound((c) => c.json({ error: { code: "not_found", message: `No route for ${c.req.method} ${c.req.path}` } }, 404));
+app.notFound((c) =>
+    c.json(
+        {
+            error: {
+                code: "not_found",
+                message: `No route for ${c.req.method} ${c.req.path}`,
+            },
+        },
+        404,
+    ),
+);
 
 app.onError((err, c) => {
-  if (err instanceof ApiError) {
-    return c.json({ error: { code: err.code, message: err.message } }, err.status as ContentfulStatusCode);
-  }
-  console.error("Request failed", { name: err.name });
-  return c.json({ error: { code: "internal", message: "The server could not complete this request." } }, 500);
+    if (err instanceof ApiError) {
+        return c.json(
+            { error: { code: err.code, message: err.message } },
+            err.status as ContentfulStatusCode,
+        );
+    }
+    console.error("Request failed", { name: err.name });
+    return c.json(
+        {
+            error: {
+                code: "internal",
+                message: "The server could not complete this request.",
+            },
+        },
+        500,
+    );
 });
 
 export { app };
 
 export default {
-  port: 3000,
-  fetch: (request: Request, server?: { requestIP: (request: Request) => { address: string } | null }) =>
-    app.fetch(request, { peerIP: server?.requestIP(request)?.address }),
+    port: Number(process.env.PORT ?? 3000),
+    fetch: (
+        request: Request,
+        server?: {
+            requestIP: (request: Request) => { address: string } | null;
+        },
+    ) => app.fetch(request, { peerIP: server?.requestIP(request)?.address }),
 };

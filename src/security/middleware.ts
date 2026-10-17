@@ -11,6 +11,7 @@ export function assertBrowserOrigin(origin: string | undefined) {
 export const requireWorkspace: MiddlewareHandler = async (c, next) => {
   if (c.req.method === "OPTIONS") return next();
   const path = c.req.path;
+  if (path === "/mcp" && c.req.header("origin") !== undefined) assertBrowserOrigin(c.req.header("origin"));
   if (path === "/api/health") return next();
   if (["/api/auth/signup", "/api/auth/signin"].includes(path)) {
     if (c.req.method !== "POST") throw new ApiError(404, "not_found", "Not found.");

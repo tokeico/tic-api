@@ -4,6 +4,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
+import type { SQL } from "drizzle-orm";
 
 const url = process.env.TEST_DATABASE_URL;
 const enabled = Boolean(url && /_test$/.test(new URL(url).pathname.slice(1)));
@@ -14,11 +15,29 @@ type Json = Record<string, any>;
 let app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> };
 let dbmod: typeof import("../src/db");
 let audit: typeof import("../src/services/audit-log");
+let principal: import("../src/security/principal").Principal;
+const actorCookies: Record<string, string> = {};
+const inWorkspace = <T>(work: () => PromiseLike<T>) => dbmod.withWorkspace(principal, async () => await work());
+const expectImmutable = (query: SQL) => expect(inWorkspace(async () => {
+  try { await dbmod.db.execute(query); }
+  catch (error) {
+    if (error instanceof Error && error.cause instanceof Error) throw error.cause;
+    throw error;
+  }
+})).rejects.toThrow("append-only");
+const authorizedRequest = (path: string, init: RequestInit = {}) => app.request(path, {
+  ...init,
+  headers: { origin: "http://localhost:8080", cookie: actorCookies[path === "/api/invoices" ? "Sam Ortiz" : "Maria Lopez"]!, ...Object.fromEntries(new Headers(init.headers)) },
+});
 
 const call = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: Json }> => {
   const res = await app.request(path, {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    headers: {
+      origin: "http://localhost:8080",
+      cookie: actorCookies[body && typeof body === "object" ? String((body as Json).approver ?? (body as Json).reviewer ?? (body as Json).by ?? "Maria Lopez") : "Maria Lopez"] ?? actorCookies["Maria Lopez"]!,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
     body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
   });
   return { status: res.status, json: (await res.json()) as Json };
@@ -32,18 +51,43 @@ suite("payouts API (Postgres)", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = url!;
     process.env.RAIL_MODE = "mock";
+    process.env.WEB_ORIGIN = "http://localhost:8080";
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     process.env.AUDIT_HMAC_KEY = randomBytes(32).toString("hex");
     process.env.AUDIT_SIGNING_KEY = privateKey.export({ format: "der", type: "pkcs8" }).toString("base64");
     process.env.AUDIT_PUBLIC_KEY = publicKey.export({ format: "der", type: "spki" }).toString("base64");
 
-    const seed = Bun.spawnSync(["bun", "run", "src/db/seed.ts"], { env: { ...process.env, DATABASE_URL: url! }, stdout: "pipe", stderr: "pipe" });
-    if (seed.exitCode !== 0) throw new Error(`seed failed: ${seed.stderr.toString()}`);
-
     dbmod = await import("../src/db");
     audit = await import("../src/services/audit-log");
     audit.resetAuditKeys();
     app = (await import("../src/index")).app;
+    const { principalFor } = await import("../src/security/auth");
+    const password = `Workflow test only ${crypto.randomUUID()}`;
+    const suffix = crypto.randomUUID();
+    const register = async (name: string, alias: string, role?: "approver" | "ap_clerk" | "auditor") => {
+      const email = `${alias.split("@")[0]}-${suffix}@example.test`;
+      let invitation: string | undefined;
+      if (role) {
+        const invited = await post("/api/auth/invitations", { email, role });
+        expect(invited.status).toBe(201);
+        invitation = invited.json.invitation;
+      }
+      const result = await app.request("/api/auth/signup", {
+        method: "POST",
+        headers: { origin: "http://localhost:8080", "content-type": "application/json" },
+        body: JSON.stringify({ name, email, password, invitation, workspaceName: "Payout workflow test" }),
+      });
+      expect(result.status).toBe(201);
+      const cookie = result.headers.get("set-cookie")!.split(";")[0]!;
+      actorCookies[name] = cookie;
+      actorCookies[alias] = cookie;
+      return cookie;
+    };
+    const cookie = await register("Maria Lopez", "maria@corredor.demo");
+    principal = (await principalFor(cookie.split("=")[1]!, "session"))!;
+    await register("Daniel Ortiz", "daniel@corredor.demo", "approver");
+    await register("Sam Ortiz", "sam@corredor.demo", "ap_clerk");
+    await register("Priya Shah", "priya@corredor.demo", "auditor");
   });
   afterAll(async () => {
     await dbmod?.client.close();
@@ -96,7 +140,6 @@ suite("payouts API (Postgres)", () => {
     expect((await post("/api/plan-all?asOf=2026-13-45")).json.error.code).toBe("invalid_as_of");
     expect((await post(`/api/payouts/${ids.br}/approve`, "{nope")).json.error.code).toBe("invalid_json");
     expect((await post(`/api/payouts/${ids.br}/approve`, {})).json.error.code).toBe("invalid_body");
-    expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "Nobody Here" })).json.error.code).toBe("user_not_found");
     expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "sam@corredor.demo" })).json.error.code).toBe("not_authorized");
     expect((await get("/api/nope")).json.error.code).toBe("not_found");
   });
@@ -110,7 +153,7 @@ suite("payouts API (Postgres)", () => {
     const { db, schema } = dbmod;
     const { eq } = await import("drizzle-orm");
     const setCap = (dailyCapUsd: number) =>
-      db.update(schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd } }).where(eq(schema.settings.key, "policy"));
+      inWorkspace(() => db.update(schema.settings).set({ value: { secondApproverAboveUsd: 50_000, dailyCapUsd } }).where(eq(schema.settings.key, "policy")));
     await setCap(17_000); // Brazil ~$15.7k fits, then Argentina ($4,000) would reach ~$19.7k
     expect((await post(`/api/payouts/${ids.br}/approve`, { approver: "Maria Lopez", comment: "ok" })).status).toBe(200);
     const ar = await post(`/api/payouts/${ids.ar}/approve`, { approver: "Maria Lopez" });
@@ -193,21 +236,21 @@ suite("payouts API (Postgres)", () => {
   });
 
   test("audit chain: every step was logged and the whole chain verifies", async () => {
-    const events = await audit.readAuditEvents(dbmod.db, { payoutId: ids.br });
+    const events = await inWorkspace(() => audit.readAuditEvents(dbmod.db, { payoutId: ids.br }));
     expect(events.map((e) => e.type)).toEqual(expect.arrayContaining(["screened", "planned", "approved", "paid", "reconciled"]));
     expect(events.some((e) => JSON.stringify(e.payload).includes("7d9f0a52"))).toBe(false); // no bank ids in the log
-    const all = await audit.readAuditEvents(dbmod.db);
+    const all = await inWorkspace(() => audit.readAuditEvents(dbmod.db));
     expect(all.some((e) => e.type === "asof_changed")).toBe(true);
     expect(all.some((e) => e.type === "screening_reviewed")).toBe(true);
-    const res = await audit.verifyAuditLog(dbmod.db);
+    const res = await inWorkspace(() => audit.verifyAuditLog(dbmod.db));
     expect(res).toMatchObject({ ok: true, count: all.length });
     expect(res.lastSignedSeq).not.toBeNull(); // checkpoints were signed (every 10 events and on booking)
   });
 
   test("the audit log can't be rewritten", async () => {
     const { sql } = await import("drizzle-orm");
-    await expect((async () => dbmod.db.execute(sql`UPDATE audit_events SET payload = '{}'::jsonb`))()).rejects.toThrow();
-    await expect((async () => dbmod.db.execute(sql`DELETE FROM audit_events`))()).rejects.toThrow();
+    await expectImmutable(sql`UPDATE audit_events SET payload = '{}'::jsonb`);
+    await expectImmutable(sql`DELETE FROM audit_events`);
   });
 
   test("rules, screening and settings for the top bar", async () => {
@@ -236,7 +279,7 @@ suite("payouts API (Postgres)", () => {
     const credit = br.lines.reduce((n: number, l: Json) => n + l.credit, 0);
     expect(Math.round(debit * 100)).toBe(Math.round(credit * 100));
 
-    const csv = await app.request("/api/ledger.csv");
+    const csv = await authorizedRequest("/api/ledger.csv");
     expect(csv.headers.get("content-type")).toContain("text/csv");
     const text = await csv.text();
     expect(text.split(/\r?\n/)[0]).toBe("JournalNo,JournalDate,AccountName,Debits,Credits,Description,Name,Currency");
@@ -250,8 +293,8 @@ suite("payouts API (Postgres)", () => {
 
   test("signed checkpoints are append-only too", async () => {
     const { sql } = await import("drizzle-orm");
-    await expect((async () => dbmod.db.execute(sql`DELETE FROM audit_checkpoints`))()).rejects.toThrow();
-    await expect((async () => dbmod.db.execute(sql`UPDATE audit_checkpoints SET signature = 'x'`))()).rejects.toThrow();
+    await expectImmutable(sql`DELETE FROM audit_checkpoints`);
+    await expectImmutable(sql`UPDATE audit_checkpoints SET signature = 'x'`);
   });
 
   test("ledger rows carry what the books page shows: invoice, route and references", async () => {
@@ -349,10 +392,11 @@ suite("payouts API (Postgres)", () => {
     expect(hypo.recommended.id).toBe("BR:usdc-base:br-ponte");
     expect((await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31&registry=br-ponte:nonsense`)).json.error.code).toBe("invalid_registry");
     expect((await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31`)).json.recommended.id).toBe("BR:usdc-base:br-sol");
-    const reg = await put({ registry: { "br-ponte": "vasp_authorized" }, by: "Daniel Ortiz" });
+    expect((await put({ registry: { "br-ponte": "vasp_authorized" }, by: "Daniel Ortiz" })).status).toBe(403);
+    const reg = await put({ registry: { "br-ponte": "vasp_authorized" }, by: "Maria Lopez" });
     expect(reg.json.registry).toEqual({ "br-ponte": "vasp_authorized" });
     expect((await get(`/api/payouts/${ids.br}/preview?asOf=2026-10-31`)).json.recommended.id).toBe("BR:usdc-base:br-ponte");
-    await put({ registry: {}, by: "Daniel Ortiz" });
+    await put({ registry: {}, by: "Maria Lopez" });
 
     const changes = ((await get("/api/audit")).json as unknown as Json[]).filter((e) => e.type === "settings_changed").map((e) => e.payload.setting);
     expect(changes).toEqual(expect.arrayContaining(["disabled_offramps", "objective", "registry"]));
@@ -407,7 +451,7 @@ suite("payouts API (Postgres)", () => {
         return script[round++]!;
       },
     };
-    const reply = await askAgent({ turns: [{ role: "user", content: "What about Mexico?" }], provider: fake as never });
+    const reply = await inWorkspace(() => askAgent({ turns: [{ role: "user", content: "What about Mexico?" }], provider: fake as never }));
 
     // Tool results went back to the model, with identifiers masked.
     const toolOut = calls[1]!;
@@ -468,7 +512,7 @@ suite("payouts API (Postgres)", () => {
         return { invoiceNumber: num, payeeName: mx.payeeName, payeeCountry: "MX", payeeTaxId: "", amount: 1200000, currency: "mxn", dueDate: "2026-11-05", bankType: "spei", bankValue: "012580001234567890", description: mx.description, purposeCode: "clabe" };
       },
     };
-    const d = await uploadInvoice({ filename: "autopartes.pdf", bytes: pdf, provider: fake as never });
+    const d = await inWorkspace(() => uploadInvoice({ filename: "autopartes.pdf", bytes: pdf, provider: fake as never }));
     expect(calls).toBe(1);
     expect(d.status).toBe("awaiting_second_approver"); // planned right away (MXN 1.2M is over $50k)
     expect(d.invoice).toMatchObject({
@@ -486,7 +530,7 @@ suite("payouts API (Postgres)", () => {
     expect(JSON.stringify(ext.payload)).not.toContain(mx.bankId!.value); // no identifiers in the log
 
     // Same PDF again: refused, and the model isn't called.
-    await expect(uploadInvoice({ filename: "again.pdf", bytes: pdf, provider: fake as never })).rejects.toMatchObject({ code: "duplicate_invoice" });
+    await expect(inWorkspace(() => uploadInvoice({ filename: "again.pdf", bytes: pdf, provider: fake as never }))).rejects.toMatchObject({ code: "duplicate_invoice" });
     expect(calls).toBe(1);
   });
 
@@ -498,13 +542,13 @@ suite("payouts API (Postgres)", () => {
     const lf = `LF-${Date.now() % 1_000_000}`;
     const pdf = await invoicePdf({ ...ar, invoiceNumber: lf });
     const { key: _k, payeeEmail: _e, ...inv } = ar;
-    await db.insert(schema.extractionCache).values({ pdfSha256: sha256Hex(pdf), invoice: { ...inv, invoiceNumber: lf }, model: "cached" });
+    await inWorkspace(() => db.insert(schema.extractionCache).values({ pdfSha256: sha256Hex(pdf), invoice: { ...inv, invoiceNumber: lf }, model: "cached" }));
 
     const saved = process.env.OLLAMA_URL;
     process.env.OLLAMA_URL = "http://127.0.0.1:9"; // model unreachable: the cache must be enough
     const form = new FormData();
     form.append("file", new File([pdf], "lucia.pdf", { type: "application/pdf" }));
-    const res = await app.request("/api/invoices", { method: "POST", body: form });
+    const res = await authorizedRequest("/api/invoices", { method: "POST", body: form });
     expect(res.status).toBe(201);
     const d = (await res.json()) as Json;
     expect(d).toMatchObject({ country: "AR", status: "ready", invoice: { invoiceNumber: lf } });
@@ -513,7 +557,7 @@ suite("payouts API (Postgres)", () => {
     const fresh = await invoicePdf({ ...ar, invoiceNumber: `${lf}-B` });
     const f2 = new FormData();
     f2.append("file", new File([fresh], "new.pdf"));
-    const r2 = await app.request("/api/invoices", { method: "POST", body: f2 });
+    const r2 = await authorizedRequest("/api/invoices", { method: "POST", body: f2 });
     expect(r2.status).toBe(503);
     expect(((await r2.json()) as Json).error.code).toBe("llm_unavailable");
     if (saved === undefined) delete process.env.OLLAMA_URL;
@@ -521,8 +565,8 @@ suite("payouts API (Postgres)", () => {
 
     const notPdf = new FormData();
     notPdf.append("file", new File(["hello"], "x.pdf"));
-    expect(((await (await app.request("/api/invoices", { method: "POST", body: notPdf })).json()) as Json).error.code).toBe("not_pdf");
-    expect(((await (await app.request("/api/invoices", { method: "POST", body: new FormData() })).json()) as Json).error.code).toBe("invalid_body");
+    expect(((await (await authorizedRequest("/api/invoices", { method: "POST", body: notPdf })).json()) as Json).error.code).toBe("not_pdf");
+    expect(((await (await authorizedRequest("/api/invoices", { method: "POST", body: new FormData() })).json()) as Json).error.code).toBe("invalid_body");
   });
 
   test("extraction merge: grounding flags what isn't on the invoice", async () => {
@@ -548,15 +592,15 @@ suite("payouts API (Postgres)", () => {
     const prompts: string[] = [];
     const fake = (out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async (_s: string, u: string) => (prompts.push(u), out.shift()) });
 
-    await expect(writeMemo(ar, fake(replies) as never)).rejects.toMatchObject({ code: "memo_guard_failed" });
+    await expect(inWorkspace(() => writeMemo(ar, fake(replies) as never))).rejects.toMatchObject({ code: "memo_guard_failed" });
     expect(prompts[1]).toContain("Rejected: you cited AR-MADE-UP"); // the retry says why
     expect(((await get(`/api/payouts/${ar}`)).json).memo.generatedBy).toBe("template");
 
-    const d = await writeMemo(ar, fake([invented, good]) as never); // fails once, then fixes it
+    const d = await inWorkspace(() => writeMemo(ar, fake([invented, good]) as never)); // fails once, then fixes it
     expect(d.memo).toMatchObject({ generatedBy: "llm", citedRuleIds: ["AR-FX-SPREAD"], summary: good.summary });
     const ev = ((await get("/api/audit")).json as unknown as Json[]).find((e) => e.type === "memo" && e.payoutId === ar)!;
     expect(ev.payload).toMatchObject({ model: "fake-memo", citedRuleIds: ["AR-FX-SPREAD"] });
-    const again = await writeMemo(ar, fake([]) as never); // same plan: reused, no model call
+    const again = await inWorkspace(() => writeMemo(ar, fake([]) as never)); // same plan: reused, no model call
     expect(again.memo?.summary).toBe(good.summary);
   });
 
@@ -620,7 +664,8 @@ suite("payouts API (Postgres)", () => {
 
     // Upload 1: extracts normally, gets flagged and held.
     const inv = { ...HOSTILE_INVOICE, invoiceNumber: `CD-${stamp}` };
-    const d = await uploadInvoice({ filename: "hostile.pdf", bytes: await invoicePdf(inv), provider: fakeFor(inv) as never });
+    const bytes = await invoicePdf(inv);
+    const d = await inWorkspace(() => uploadInvoice({ filename: "hostile.pdf", bytes, provider: fakeFor(inv) as never }));
     expect(d.status).toBe("ready"); // the plan still runs; the hold gates approval, not the engine
     expect(d.onSecurityHold).toBe(true);
     expect(d.securityHold).toMatchObject({ status: "active" });
@@ -638,9 +683,9 @@ suite("payouts API (Postgres)", () => {
     const prompts: string[] = [];
     const payClaim = { summary: "Consultoria Delta is being paid.", routeRationale: "Pix is cheapest.", warnings: [], humanChecks: [], citedRuleIds: [] };
     const good = { summary: "USD 3,500.00 to Consultoria Delta Ltda via Pix, on security hold.", routeRationale: "Pix via Sol VASP is the cheapest compliant route.", warnings: ["BR-VASP-UNFILED-WARN: Sol hasn't filed"], humanChecks: ["Clear the security hold"], citedRuleIds: ["BR-VASP-UNFILED-WARN"] };
-    await expect(writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async (_s: string, u: string) => (prompts.push(u), out.shift()) }))([payClaim, payClaim]) as never)).rejects.toMatchObject({ code: "memo_guard_failed" });
+    await expect(inWorkspace(() => writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async (_s: string, u: string) => (prompts.push(u), out.shift()) }))([payClaim, payClaim]) as never))).rejects.toMatchObject({ code: "memo_guard_failed" });
     expect(prompts[0]).toContain("security hold"); // the model was told
-    const memoed = await writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async () => out.shift() }))([good]) as never);
+    const memoed = await inWorkspace(() => writeMemo(d.id, ((out: unknown[]) => ({ name: "fake", model: "fake-memo", available: async () => true, chat: async () => ({ content: "", toolCalls: [] }), json: async () => out.shift() }))([good]) as never));
     expect(memoed.memo!.summary).toContain("on security hold");
 
     // A person clears it; then approval works.
@@ -653,7 +698,8 @@ suite("payouts API (Postgres)", () => {
 
     // Upload 2: a second hostile invoice is kept on hold as suspicious, and stays locked.
     const inv2 = { ...HOSTILE_INVOICE, invoiceNumber: `CD-${stamp + 1}` };
-    const d2 = await uploadInvoice({ filename: "hostile2.pdf", bytes: await invoicePdf(inv2), provider: fakeFor(inv2) as never });
+    const bytes2 = await invoicePdf(inv2);
+    const d2 = await inWorkspace(() => uploadInvoice({ filename: "hostile2.pdf", bytes: bytes2, provider: fakeFor(inv2) as never }));
     const kept = await post(`/api/payouts/${d2.id}/security-review`, { reviewer: "Daniel Ortiz", decision: "confirmed_suspicious", note: "This is not a real supplier." });
     expect(kept.json.securityHold).toMatchObject({ status: "confirmed_suspicious", reviewedBy: "Daniel Ortiz" });
     expect(kept.json.onSecurityHold).toBe(true);

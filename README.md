@@ -38,6 +38,15 @@ Check http://localhost:3000/api/health again: `"llm": true` confirms the configu
 
 See [docs/AGENT.md](./docs/AGENT.md) for model settings and extraction behavior, and [DATABASE.md](./DATABASE.md) for database setup and deployment.
 
+## Docker
+
+```sh
+docker build -t tic-api .
+docker run --env-file .env -p 3000:3000 tic-api
+```
+
+`DATABASE_URL` must reach Postgres from inside the container (a compose network or `host.docker.internal`, not localhost). The entrypoint applies migrations before starting, and the image bundles `data/` and `drizzle/`. From the hackathon root, `docker compose up -d --build` (see `../docker-compose.yml`) runs db + api + web at http://localhost:8080.
+
 ## Checks
 
 ```sh

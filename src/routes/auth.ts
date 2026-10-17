@@ -25,8 +25,8 @@ async function body<S extends z.ZodType>(c: Context, shape: S): Promise<z.infer<
   return parsed.data;
 }
 
-async function establishSession(c: Context, account: { accountId: string; workspaceId: string }) {
-  const token = await issueSession(account.accountId, account.workspaceId);
+async function establishSession(c: Context, account: { accountId: string; workspaceId: string }, issuedToken?: string) {
+  const token = issuedToken ?? await issueSession(account.accountId, account.workspaceId);
   const principal = await principalFor(token, "session");
   if (!principal) throw new Error("Could not establish the session.");
   setCookie(c, SESSION_COOKIE, token, cookieOptions);
@@ -54,6 +54,29 @@ authRoutes.post("/signin", async (c) => {
 });
 
 authRoutes.get("/me", (c) => c.json({ user: publicUser(requirePrincipal()) }));
+
+authRoutes.get("/workspaces", async (c) => {
+  const p = requirePrincipal();
+  const rows = await adminDb.select({ id: schema.authWorkspaces.id, name: schema.authWorkspaces.name, ownerId: schema.authWorkspaces.ownerId, role: schema.authMemberships.role })
+    .from(schema.authMemberships).innerJoin(schema.authWorkspaces, eq(schema.authMemberships.workspaceId, schema.authWorkspaces.id))
+    .where(eq(schema.authMemberships.accountId, p.accountId));
+  return c.json(rows.map(({ ownerId, ...workspace }) => ({ ...workspace, owner: ownerId === p.accountId })));
+});
+
+authRoutes.post("/workspace", async (c) => {
+  const p = requirePrincipal();
+  if (p.credential !== "session") throw new ApiError(403, "session_required", "Switch workspaces from a signed-in browser.");
+  const { workspaceId } = await body(c, z.object({ workspaceId: z.string().uuid() }));
+  const token = newToken("cs_");
+  await adminDb.transaction(async (tx) => {
+    const [member] = await tx.select().from(schema.authMemberships).where(and(eq(schema.authMemberships.accountId, p.accountId), eq(schema.authMemberships.workspaceId, workspaceId))).for("update");
+    if (!member) throw new ApiError(404, "not_found", "Workspace not found.");
+    await tx.insert(schema.authSessions).values({ tokenHash: tokenHash(token), accountId: p.accountId, workspaceId, expiresAt: new Date(Date.now() + SESSION_SECONDS * 1000) });
+    await tx.update(schema.authSessions).set({ expiresAt: new Date() }).where(eq(schema.authSessions.tokenHash, p.tokenHash));
+    await tx.insert(schema.authEvents).values({ accountId: p.accountId, action: "workspace_switched" });
+  });
+  return c.json(await establishSession(c, { accountId: p.accountId, workspaceId }, token));
+});
 
 authRoutes.post("/signout", async (c) => {
   const p = requirePrincipal();

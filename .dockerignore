@@ -1,0 +1,16 @@
+node_modules
+.git
+.env
+.env.*
+dist
+test
+scripts
+docs
+coverage
+*.md
+.vscode
+.claude
+drizzle.config.ts
+docker-compose.yml
+Dockerfile
+dbcheck.ts
