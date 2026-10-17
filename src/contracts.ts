@@ -198,6 +198,7 @@ export const Memo = z.object({
   warnings: z.array(z.string()),
   humanChecks: z.array(z.string()),
   vendorEmail: z.string().optional(),
+  generatedBy: z.enum(["template", "llm"]).optional(), // template = built from the plan; llm = written by the model, citations checked
 });
 export type Memo = z.infer<typeof Memo>;
 

@@ -43,6 +43,13 @@
       "when": 1792256347671,
       "tag": "0005_blue_titanium_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792260118452,
+      "tag": "0006_cynical_spitfire",
+      "breakpoints": true
     }
   ]
 }

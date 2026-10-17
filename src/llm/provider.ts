@@ -31,6 +31,8 @@ export interface LlmProvider {
   name: string;
   model: string;
   chat(system: string, messages: ChatMessage[], tools: ToolSpec[]): Promise<ChatResult>;
+  /** One-shot structured output: the reply must match `schema` (JSON Schema). */
+  json(system: string, user: string, schema: Record<string, unknown>): Promise<unknown>;
   /** Ollama is running and the model is pulled. */
   available(): Promise<boolean>;
 }
@@ -85,6 +87,26 @@ export function toolCallsFromText(content: string, tools: ToolSpec[]): ToolCall[
   }
 }
 
+async function call(base: string, model: string, body: unknown): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new LlmUnavailableError(`Can't reach Ollama at ${base}: ${(err as Error).message}. Is \`ollama serve\` running?`);
+  }
+  if (!res.ok) {
+    const detail = (await res.text()).slice(0, 300);
+    if (res.status === 404) throw new LlmUnavailableError(`Model ${model} isn't pulled. Run: ollama pull ${model}`);
+    throw new LlmUnavailableError(`Ollama call failed (${res.status}): ${detail}`);
+  }
+  return res.json();
+}
+
 export function ollamaProvider(url = process.env.OLLAMA_URL ?? "http://localhost:11434", model = process.env.LLM_MODEL ?? "llama3.1:8b"): LlmProvider {
   const base = url.replace(/\/$/, "");
   return {
@@ -98,6 +120,24 @@ export function ollamaProvider(url = process.env.OLLAMA_URL ?? "http://localhost
         return (models ?? []).some((m) => m.name === model || m.name === `${model}:latest`);
       } catch {
         return false;
+      }
+    },
+    async json(system, user, schema) {
+      const out = (await call(base, model, {
+        model,
+        stream: false,
+        format: schema,
+        options: { temperature: 0, seed: 7, num_ctx: Number(process.env.LLM_NUM_CTX ?? 8192) },
+        keep_alive: "30m",
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      })) as { message?: { content?: string } };
+      try {
+        return JSON.parse(out.message?.content ?? "");
+      } catch {
+        throw new LlmUnavailableError("The model didn't return valid JSON.");
       }
     },
     async chat(system, messages, tools) {
@@ -123,23 +163,7 @@ export function ollamaProvider(url = process.env.OLLAMA_URL ?? "http://localhost
           }),
         ],
       };
-      let res: Response;
-      try {
-        res = await fetch(`${base}/api/chat`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-      } catch (err) {
-        throw new LlmUnavailableError(`Can't reach Ollama at ${base}: ${(err as Error).message}. Is \`ollama serve\` running?`);
-      }
-      if (!res.ok) {
-        const detail = (await res.text()).slice(0, 300);
-        if (res.status === 404) throw new LlmUnavailableError(`Model ${model} isn't pulled. Run: ollama pull ${model}`);
-        throw new LlmUnavailableError(`Ollama call failed (${res.status}): ${detail}`);
-      }
-      const out = (await res.json()) as { message?: { content?: string; tool_calls?: { function: { name: string; arguments: unknown } }[] } };
+      const out = (await call(base, model, body)) as { message?: { content?: string; tool_calls?: { function: { name: string; arguments: unknown } }[] } };
       const content = out.message?.content ?? "";
       const calls = (out.message?.tool_calls ?? []).map((c) => ({ id: callId(), name: c.function.name, args: parseArgs(c.function.arguments) }));
       return { content, toolCalls: calls.length ? calls : toolCallsFromText(content, tools) };

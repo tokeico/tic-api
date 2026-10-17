@@ -68,10 +68,10 @@ export type ReconciliationStatus = (typeof RECONCILIATION_STATUSES)[number];
 export const INVOICE_SOURCES = ["upload", "seed"] as const;
 export type InvoiceSource = (typeof INVOICE_SOURCES)[number];
 
-export const EXTRACTION_SOURCES = ["claude", "cache", "manual", "seed"] as const;
+export const EXTRACTION_SOURCES = ["claude", "cache", "manual", "seed", "llm"] as const; // "claude" is legacy: the local model writes "llm"
 export type ExtractionSource = (typeof EXTRACTION_SOURCES)[number];
 
-export const MEMO_GENERATORS = ["claude", "template"] as const;
+export const MEMO_GENERATORS = ["claude", "template", "llm"] as const; // "claude" is legacy
 export type MemoGenerator = (typeof MEMO_GENERATORS)[number];
 
 export const VENDOR_REQUEST_STATUSES = ["draft", "sent", "resolved"] as const;

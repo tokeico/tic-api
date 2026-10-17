@@ -109,7 +109,14 @@ function toSummary(p: { id: string; status: PayoutStatus; amountUsd: number | nu
 function toMemo(memos: FullPayout["plans"][number]["memos"]): Memo | null {
   const m = [...memos].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
   return m
-    ? { summary: m.summary, routeRationale: m.routeRationale, citedRuleIds: m.citedRuleIds, warnings: m.warnings, humanChecks: m.humanChecks }
+    ? {
+        summary: m.summary,
+        routeRationale: m.routeRationale,
+        citedRuleIds: m.citedRuleIds,
+        warnings: m.warnings,
+        humanChecks: m.humanChecks,
+        generatedBy: m.generatedBy === "template" ? ("template" as const) : ("llm" as const),
+      }
     : null;
 }
 
@@ -125,7 +132,7 @@ function toDetail(p: FullPayout): PayoutDetail {
     // A stored (model-written) memo wins; otherwise the deterministic template, built from the plan.
     memo: planRow
       ? (toMemo(planRow.memos) ??
-        templateMemo({ invoice: rowToInvoice(p.invoice!), plan: planRow.plan, amountUsd: p.amountUsd ?? planRow.plan.evaluations[0]?.route.amountUsd ?? 0 }))
+        { ...templateMemo({ invoice: rowToInvoice(p.invoice!), plan: planRow.plan, amountUsd: p.amountUsd ?? planRow.plan.evaluations[0]?.route.amountUsd ?? 0 }), generatedBy: "template" as const })
       : null,
     approvals: p.approvals
       .filter((a) => a.decision === "approved")

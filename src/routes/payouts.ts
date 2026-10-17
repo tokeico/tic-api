@@ -8,6 +8,7 @@ import { ApproveRequest, InvoicePatch, OfframpType, ScreeningReviewRequest } fro
 import { isIsoDate } from "../corredor";
 import { ApiError } from "../http-error";
 import * as svc from "../services/payouts";
+import { writeMemo } from "../services/memo";
 import { getDemoAsOf } from "../services/settings";
 import { db } from "../db";
 
@@ -99,3 +100,6 @@ payoutRoutes.post("/:id/reconcile", async (c) => c.json(await svc.reconcilePayou
 export const planAllRoute = new Hono();
 
 planAllRoute.post("/", async (c) => c.json(await svc.planAll(asOfParam(c) ?? (await getDemoAsOf(db)))));
+
+/** POST /api/payouts/:id/memo  The local model writes the memo for the current plan (citations checked). */
+payoutRoutes.post("/:id/memo", async (c) => c.json(await writeMemo(c.req.param("id"))));
