@@ -14,9 +14,10 @@ COPY package.json tsconfig.json ./
 COPY src ./src
 COPY drizzle ./drizzle
 COPY data ./data
-COPY --chmod=0755 docker-entrypoint.sh ./
+COPY docker-entrypoint.sh ./
+RUN chmod 0755 docker-entrypoint.sh
 USER bun
 EXPOSE 3000
 ENTRYPOINT ["./docker-entrypoint.sh"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD bun --eval 'const r = await fetch(`http://127.0.0.1:${process.env.PORT ?? 3000}/api/health`); process.exit(r.ok && (await r.json()).db === true ? 0 : 1)'
+    CMD bun --eval 'const r = await fetch(`http://127.0.0.1:${process.env.PORT ?? 3000}/api/health`); process.exit(r.ok && (await r.json()).db === true ? 0 : 1)'
