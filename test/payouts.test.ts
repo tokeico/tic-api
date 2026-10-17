@@ -208,4 +208,19 @@ suite("payouts API (Postgres)", () => {
     await expect((async () => dbmod.db.execute(sql`UPDATE audit_events SET payload = '{}'::jsonb`))()).rejects.toThrow();
     await expect((async () => dbmod.db.execute(sql`DELETE FROM audit_events`))()).rejects.toThrow();
   });
+
+  test("rules, screening and settings for the top bar", async () => {
+    const ids = async (asOf: string) => ((await get(`/api/rules?asOf=${asOf}`)).json as Json[]).map((r) => r.id);
+    expect(await ids("2026-09-30")).not.toContain("BR-561-EFX");
+    expect(await ids("2026-10-30")).toEqual(expect.arrayContaining(["BR-561-EFX", "BR-VASP-AUTH"]));
+    expect(await ids("2026-10-30")).not.toContain("BR-VASP-PENDING-WARN");
+    expect((await get("/api/rules?asOf=2026-13-01")).json.error.code).toBe("invalid_as_of");
+
+    expect((await get("/api/screen?name=Lucía%20Fernández")).json).toMatchObject({ status: "clear" });
+    expect((await get("/api/screen")).status).toBe(400);
+
+    const settings = await get("/api/settings");
+    expect(settings.json).toMatchObject({ railMode: "mock", policy: { secondApproverAboveUsd: 50000, dailyCapUsd: 150000 } });
+    expect(settings.json.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
 });
