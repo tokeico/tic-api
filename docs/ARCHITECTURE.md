@@ -272,7 +272,9 @@ export async function chatJSON<T extends z.ZodType>(schema: T, system: string, u
 | GET | `/api/payouts` · `/api/payouts?detail=1` · `/api/payouts/:id` | `PayoutSummary[]` · `PayoutDetail[]` (one request for the whole UI) · `PayoutDetail` (with a template memo and a plan `fingerprint`) |
 | GET | `/api/payouts/:id/preview?asOf=&registry=id:type` | dry run: the plan on another date, optionally with a hypothetical registry update. Stores nothing |
 | GET | `/api/payouts/:id/replay?n=100` | recompute the plan n times → `{ identical, matchesStored, fingerprint, ms }` (determinism proof) |
-| POST | `/api/invoices` | multipart PDF → text → extract → create payout (`draft`) → plan |
+| POST | `/api/invoices` | multipart PDF (`file`) → text → checksum pre-pass + local model → invoice + payout → plan. `409` duplicate, `422` no text layer, `503` model down (cache hits still work). See docs/AGENT.md |
+| POST | `/api/payouts/:id/memo` | the local model writes the memo for the current plan; citation and decision guards, else the template stays |
+| POST/GET | `/api/agent/chat` · `/api/agent/status` | the Agent tab's local model (read-only tools + proposals) |
 | PATCH | `/api/payouts/:id` | edit invoice fields → re-plan. A failed checksum puts the field back in `lowConfidence`. Approved payouts are frozen (409 `plan_locked`) |
 | POST | `/api/payouts/:id/plan?asOf=` | screen + quote + rules → `Plan`, then memo |
 | POST | `/api/plan-all?asOf=` | re-plan all open payouts → `{ payouts, reroutes }` (the slider calls this) |

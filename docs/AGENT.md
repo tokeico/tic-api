@@ -1,6 +1,6 @@
-# The Corredor agent (local LLM)
+# The local LLM: agent, invoice extraction and memos
 
-The Agent tab's chat is answered by a **local model in Ollama**. Nothing leaves the machine (DECISIONS D12). If the model is unreachable, the web app falls back to scripted replies over the same live data, so the demo never breaks.
+The local model in Ollama does three jobs: answers the Agent tab's chat, reads uploaded invoice PDFs, and writes payout memos. Nothing leaves the machine (DECISIONS D12). If the model is unreachable, the web app falls back to scripted replies over the same live data, so the demo never breaks.
 
 **Principle:** AI reads and explains, code decides, a person approves. The model can look things up and *propose* actions. It cannot approve, pay, reconcile or change a rule, because no tool for that exists.
 
@@ -61,6 +61,28 @@ Agent tab ──POST /api/agent/chat { messages, asOf }──▶ src/llm/agent.t
 - **Masking:** bank and tax identifiers reach the model only as "ending 1234"; any 8+ digit run in the answer or an email draft is masked again (dates are left alone).
 - **Citation guard:** rule ids in the answer must exist in the pack. Made-up ones are marked `[not in the rules pack]` and listed in `removedCites`.
 - **Autonomy** (Customize tab, browser session): *Suggest only* drops proposals, *Prepare* queues them, *Auto-run low-risk* applies only `asof` (moving the demo clock) by itself.
+
+## Invoice extraction (`POST /api/invoices`)
+
+`src/llm/extract.ts` + `src/services/invoices.ts`. Multipart form, field `file`, one PDF (max 10 MB) → `201 PayoutDetail` (already planned).
+
+1. sha256 of the PDF. Same PDF twice → `409 duplicate_invoice`. `extraction_cache` hit → no model call (the cache survives `db:seed`, so pre-warmed demo PDFs work offline).
+2. Text with `unpdf` (no vision model). No text layer → `422 no_text`. Not a PDF → `400 not_pdf`.
+3. **Pre-pass:** regexes find CLABE, CVU, Pix keys, BICs, CNPJ, RFC, CUIT and RIF; checksums validate them. A validated value always beats the model.
+4. **Model:** Ollama structured output (`format` = JSON schema, temperature 0, `num_predict` capped). Keep the schema to plain strings: nullable unions made llama3.1 stall until the timeout.
+5. **lowConfidence is computed, not asked:** a field is flagged when it is missing, fails validation, or isn't found in the PDF text (grounding). The model's own "unsure" list was unreliable.
+6. One transaction: invoice + draft payout + `extracted` audit event (field names only, no identifiers); then the payout is planned.
+
+Demo PDFs: `bun run scripts/demo-pdfs.ts` writes the four demo invoices to `data/invoices/` (byte-stable, so cached extractions keep matching). Uploading them while the seeded demo set exists creates second copies; for a clean upload demo, reset first and upload instead of "Load the demo invoices".
+
+## Memos (`POST /api/payouts/:id/memo`)
+
+`src/services/memo.ts`. Every payout has a deterministic **template memo** built from its plan (`corredor/memo.ts`). "Write memo" in the UI asks the model to write a better one for the current plan; it is stored per plan (`memos`, `generated_by = llm`) and audited (`memo`). Guards, in code:
+
+- **Citation guard:** only rule ids from the plan's checks may be cited (in the list or the prose).
+- **Decision guard:** a blocked or on-hold payout can't be described as being paid, and nothing can be called "approved".
+
+A failed guard is retried once with the reason; a second failure → `422 memo_guard_failed` and the template stays. `503 llm_unavailable` when Ollama is down.
 
 ## For coding agents working on this
 
