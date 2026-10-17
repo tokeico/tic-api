@@ -658,6 +658,8 @@ suite("payouts API (Postgres)", () => {
     expect(kept.json.securityHold).toMatchObject({ status: "confirmed_suspicious", reviewedBy: "Daniel Ortiz" });
     expect(kept.json.onSecurityHold).toBe(true);
     expect(((await post(`/api/payouts/${d2.id}/approve`, { approver: "Maria Lopez" })).json.error.code)).toBe("security_hold");
+    // A held payout can still be REJECTED (refusing a payment is never unsafe)…
+    expect((await post(`/api/payouts/${d2.id}/approve`, { approver: "Maria Lopez", decision: "rejected" })).json.status).toBe("rejected");
 
     const held = ((await get("/api/audit")).json as unknown as Json[]).filter((e) => e.type === "security_reviewed");
     expect(held.map((e) => e.payload.decision)).toEqual(["confirmed_suspicious", "cleared"]); // newest first

@@ -610,13 +610,14 @@ export async function reviewSanctions(id: string, req: SanctionsReviewRequest): 
 // ---- Security hold (prompt-injection defense) ---------------------------------------
 
 /** Refuse to approve or pay while a security hold gates the payout
- *  (both "active" and "confirmed_suspicious"; only a person's "cleared" lifts it). */
-async function assertNoSecurityHold(tx: Tx, payoutId: string): Promise<void> {
+ *  (both "active" and "confirmed_suspicious"; only a person's "cleared" lifts
+ *  it). Rejections stay possible: refusing a payment is never unsafe. */
+async function assertNoSecurityHold(tx: Tx, payoutId: string, decision?: "approved" | "rejected"): Promise<void> {
   const hold = await tx.query.securityHolds.findFirst({
     where: eq(securityHolds.payoutId, payoutId),
     orderBy: [desc(securityHolds.createdAt)],
   });
-  if (hold && hold.status !== "cleared") {
+  if (hold && hold.status !== "cleared" && decision !== "rejected") {
     const n = hold.findings.length;
     throw new ApiError(409, "security_hold", `Instruction-like text in this invoice was flagged (${n} line${n === 1 ? "" : "s"}). A person must review it first: see the Security hold card.`);
   }
@@ -659,7 +660,7 @@ export async function approve(id: string, req: ApproveRequest): Promise<PayoutDe
   try {
     await db.transaction(async (tx) => {
       const payout = await lock(tx, id);
-      await assertNoSecurityHold(tx, id); // the security hold gates approval too, whatever the plan says
+      await assertNoSecurityHold(tx, id, req.decision); // the security hold gates approval; rejection stays possible
       const approver = await resolveUser(tx, req.approver, APPROVER_ROLES, "approve payouts");
       const planRow = await tx.query.plans.findFirst({ where: eq(plans.payoutId, id), orderBy: [desc(plans.createdAt)] });
       if (!planRow) throw new ApiError(409, "no_plan", "This payout hasn't been planned yet.");
