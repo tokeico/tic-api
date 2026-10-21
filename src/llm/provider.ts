@@ -171,4 +171,25 @@ export function ollamaProvider(url = process.env.OLLAMA_URL ?? "http://localhost
   };
 }
 
-export const getProvider = (): LlmProvider => ollamaProvider();
+/**
+ * No model: every call fails with LlmUnavailableError, so callers take their
+ * existing fallbacks (template memos, cached extractions, scripted web replies).
+ */
+const disabledProvider: LlmProvider = {
+  name: "none",
+  model: "none",
+  async available() {
+    return false;
+  },
+  async chat() {
+    throw new LlmUnavailableError("No model is configured on this deployment.");
+  },
+  async json() {
+    throw new LlmUnavailableError("No model is configured on this deployment.");
+  },
+};
+
+// Ollama is switched off for now so the API runs as a standalone container
+// (BitQate). To turn it back on, swap these two lines and set OLLAMA_URL.
+// export const getProvider = (): LlmProvider => ollamaProvider();
+export const getProvider = (): LlmProvider => disabledProvider;

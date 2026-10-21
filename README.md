@@ -63,6 +63,10 @@ docker run --env-file .env -p 3000:3000 tic-api
 
 `DATABASE_URL` must reach Postgres from inside the container (a compose network or `host.docker.internal`, not localhost). The entrypoint applies migrations before starting, and the image bundles `data/` and `drizzle/`. From the hackathon root, `docker compose up -d --build` (see `../docker-compose.yml`) runs db + api + web at http://localhost:8080.
 
+**Ollama is switched off for now** (`getProvider()` in `src/llm/provider.ts` returns a no-model provider; the Ollama code is kept). `/api/health` reports `"llm": false`, and the app uses its fallbacks: template memos, cached extractions and scripted agent replies. Uploading a new PDF that isn't already cached returns `llm_unavailable`.
+
+**BitQate:** deploy this directory as a Docker app on port 3000 and set `DATABASE_URL` (managed Postgres), `WEB_ORIGIN` (the exact HTTPS web origin) and the three `AUDIT_*` keys as secrets. Point the web app's `API_ORIGIN` at the API's public URL.
+
 Migrations apply automatically at start, but the demo data needs a one-off seed: `docker compose exec api bun run src/db/seed.ts` from the hackathon root. It wipes and reseeds, which is also how you reset before the pitch.
 
 ## Checks
