@@ -1,4 +1,4 @@
-// Writes the four demo invoices (src/corredor/demo.ts) as PDFs to data/invoices/,
+// Writes the four demo invoices (src/corredor/demo.ts) as PDFs to reference/invoices/,
 // for the upload demo and the extraction tests. Byte-stable: the same data
 // always gives the same file, so extraction caches by sha256 keep working.
 // Also writes a fifth "hostile" invoice whose notes try to instruct the AI:
@@ -10,7 +10,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { DEMO_INVOICES, type DemoInvoice } from "../src/corredor";
 
-const outDir = (process.argv[2] ?? new URL("../data/invoices/", import.meta.url).pathname).replace(/\/?$/, "/");
+const outDir = (process.argv[2] ?? new URL("../reference/invoices/", import.meta.url).pathname).replace(/\/?$/, "/");
 const FIXED = new Date("2026-10-10T12:00:00Z");
 
 const TAX = { BR: "CNPJ", MX: "RFC", AR: "CUIT", VE: "RIF", CO: "NIT" } as const;

@@ -8,7 +8,7 @@ import { round2 } from "./util";
 
 export class UnknownCurrencyError extends Error {
   constructor(public currency: string) {
-    super(`No FX rate for ${currency}. Add it to data/fx.json or fix the invoice currency.`);
+    super(`No FX rate for ${currency}. Add it to reference/fx.json or fix the invoice currency.`);
     this.name = "UnknownCurrencyError";
   }
 }

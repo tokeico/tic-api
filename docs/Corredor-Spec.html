@@ -689,7 +689,7 @@ h1{font-family:var(--display);font-size:clamp(2.2rem,5vw,3.2rem);font-weight:800
 │  ├─ extract.ts            text → Invoice (+ sha256 cache in DB)
 │  └─ memo.ts               Plan → Memo (cited-rule guard, template fallback)
 ├─ db/{index,schema,migrate}.ts   (existing; add tables §11)
-data/   offramps.json · fx.json · sdn.csv · seed/invoices/*.pdf
+reference/   offramps.json · fx.json · sdn.csv · seed/invoices/*.pdf
 scripts/ seed.ts · fixtures.ts (writes fixtures for tic-web) · keys.ts (generates audit keys)
 test/   rules.test.ts · audit.test.ts
 Dockerfile
@@ -835,7 +835,7 @@ export type Memo = z.infer&lt;typeof Memo&gt;;
 <p>⚠ <strong>Verify before the pitch:</strong> the BR rows against the BCB resolutions; the MX effective date (Banxico Circular 4/2019); and the date of the AR PSAV registry. Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI.</p>
 <p><strong>Check functions</strong> (<code>checks.ts</code>): <code>always</code>, <code>offrampTypeIn(types)</code>, <code>amountUsdAbove(limit, offrampTypes?)</code>, <code>requireFields(fields)</code>, <code>fxSpreadAbove(pct, pair)</code>. Each is pure: <code>(ctx: { invoice, route, fx }) =&gt; boolean | { missing: string[] }</code>.</p>
 <h2 id="arch-7-demo-data">7. Demo data</h2>
-<p><strong><code>data/offramps.json</code></strong> (fictional providers, labeled demo):</p>
+<p><strong><code>reference/offramps.json</code></strong> (fictional providers, labeled demo):</p>
 <div class="tbl"><table>
 <thead>
 <tr>
@@ -918,7 +918,7 @@ export type Memo = z.infer&lt;typeof Memo&gt;;
 - <strong>BR:</strong> before Oct 1, PagaFX wins. Oct 1–29, Ponte wins with a warning. From Oct 30, only Sol passes. That gives <strong>three distinct routes</strong> on the slider.
 - <strong>MX:</strong> Banco Azul is always blocked, so Puente is chosen.
 - <strong>AR:</strong> Cueva is blocked, so Pampa is chosen.</p>
-<p><strong><code>data/fx.json</code></strong> (demo rates, labeled): <code>{ "BRL": 5.40, "MXN": 18.50, "ARS_official": 1350, "ARS_parallel": 1460 }</code>. The wire route is always <code>{ feePct: 4.5, minutes: 2880 }</code>.</p>
+<p><strong><code>reference/fx.json</code></strong> (demo rates, labeled): <code>{ "BRL": 5.40, "MXN": 18.50, "ARS_official": 1350, "ARS_parallel": 1460 }</code>. The wire route is always <code>{ feePct: 4.5, minutes: 2880 }</code>.</p>
 <h2 id="arch-8-local-llm-ollama-llama">8. Local LLM (Ollama + Llama)</h2>
 <div class="tbl"><table>
 <thead>

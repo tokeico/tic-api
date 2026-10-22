@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { DEMO_INVOICES, loadSdnList, screenName } from "../src/corredor";
 import { demoRoutes } from "../src/routes/demo";
 
-const dir = fileURLToPath(new URL("../data/presentation/", import.meta.url));
+const dir = fileURLToPath(new URL("../reference/presentation/", import.meta.url));
 
 describe("fictional presentation screening", () => {
   test("all primary names and aliases are explicitly fictional", async () => {

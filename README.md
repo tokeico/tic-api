@@ -61,7 +61,7 @@ docker build -t tic-api .
 docker run --env-file .env -p 3000:3000 tic-api
 ```
 
-`DATABASE_URL` must reach Postgres from inside the container (a compose network or `host.docker.internal`, not localhost). The entrypoint applies migrations before starting, and the image bundles `data/` and `drizzle/`. From the hackathon root, `docker compose up -d --build` (see `../docker-compose.yml`) runs db + api + web at http://localhost:8080.
+`DATABASE_URL` must reach Postgres from inside the container (a compose network or `host.docker.internal`, not localhost). The entrypoint applies migrations before starting, and the image bundles `reference/` and `drizzle/`. From the hackathon root, `docker compose up -d --build` (see `../docker-compose.yml`) runs db + api + web at http://localhost:8080.
 
 **Ollama is switched off for now** (`getProvider()` in `src/llm/provider.ts` returns a no-model provider; the Ollama code is kept). `/api/health` reports `"llm": false`, and the app uses its fallbacks: template memos, cached extractions and scripted agent replies. Uploading a new PDF that isn't already cached returns `llm_unavailable`.
 
@@ -81,4 +81,4 @@ Workflow tests create a new isolated workspace rather than reseeding the shared 
 
 ## Fictional presentation screening
 
-`GET /api/demo/screen?name=Demo%20Lumen%20Trading` runs the normal name-matching algorithm against invented organizations and aliases in `data/presentation/`. Every response includes `simulated: true` and a fictional list version. This read-only sandbox never participates in payout approval or replaces the real OFAC snapshot in `data/sdn.csv` and `data/alt.csv`.
+`GET /api/demo/screen?name=Demo%20Lumen%20Trading` runs the normal name-matching algorithm against invented organizations and aliases in `reference/presentation/`. Every response includes `simulated: true` and a fictional list version. This read-only sandbox never participates in payout approval or replaces the real OFAC snapshot in `reference/sdn.csv` and `reference/alt.csv`.

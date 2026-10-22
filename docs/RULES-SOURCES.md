@@ -279,7 +279,7 @@ Other primary links: [RG 994/2024](https://www.boletinoficial.gob.ar/detalleAvis
 | CCL | about 1,620 | +6.3–6.8% | press, dolarapi.com (secondary) |
 | **USDT/ARS (crypto)**, our "parallel" leg | **1,619** | **+6.7%** | dolarapi.com (secondary) |
 
-`data/fx.json` now uses 1,518 and 1,619, so the warning reads "Official 1,518 vs. market (USDT) 1,619 ARS/USD (6.7% gap)".
+`reference/fx.json` now uses 1,518 and 1,619, so the warning reads "Official 1,518 vs. market (USDT) 1,619 ARS/USD (6.7% gap)".
 
 **Who it binds.** No one. It tells the operator to agree with the supplier which rate converts a peso invoice.
 
@@ -324,7 +324,7 @@ If quoting EO 13884 sec. 6(d) on stage, use the exact text:
 - Sanctions were eased a lot in 2026, but **only through general licenses**. No blocking or prohibition EO was revoked.
 - The national emergency was continued for one year on 18 Feb 2026 (91 FR 8357). It must be renewed by about 8 Mar 2027.
 - GL 57 (14 Apr 2026) authorizes financial services involving the central bank, Banco de Venezuela, Banco del Tesoro and Banco Digital de los Trabajadores. GL 60A came out on 16 Oct 2026, the day before the pitch.
-- Delcy Rodríguez (1 Apr 2026) and Jorge Rodríguez (14 Oct 2026) were removed from the SDN List. Our SDN snapshot (`data/sdn.csv`, "OFAC SDN 2026-10-17" per `data/sdn.meta.json`) reflects both removals and still lists Maduro.
+- Delcy Rodríguez (1 Apr 2026) and Jorge Rodríguez (14 Oct 2026) were removed from the SDN List. Our SDN snapshot (`reference/sdn.csv`, "OFAC SDN 2026-10-17" per `reference/sdn.meta.json`) reflects both removals and still lists Maduro.
 
 **What we changed and why.** The old message, "Hard stop: Venezuela sanctions. Requires a named OFAC general license and compliance sign-off.", implied every Venezuelan payment needs a license. FAQ 680 says the opposite for non-blocked private parties. The `block` outcome stays, reframed as a **company policy hold pending sanctions review**. An AP agent can't verify ownership chains or state links on its own, so a human confirms that the payee, its owners and the receiving bank or off-ramp are not blocked, or are covered by a general license. The id, check and outcome didn't change.
 

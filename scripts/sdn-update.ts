@@ -1,11 +1,11 @@
 import { fileURLToPath } from "node:url";
-// Refresh the committed OFAC snapshot in data/: the SDN list (sdn.csv, alt.csv)
+// Refresh the committed OFAC snapshot in reference/: the SDN list (sdn.csv, alt.csv)
 // plus the consolidated non-SDN lists (cons_prim.csv, cons_alt.csv), and
 // sdn.meta.json. Usage: bun run scripts/sdn-update.ts
 // The files are only ever parsed as CSV data. Review the diff before committing.
 
 const BASE = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports";
-const dir = fileURLToPath(new URL("../data/", import.meta.url));
+const dir = fileURLToPath(new URL("../reference/", import.meta.url));
 
 // remote name, local file, first-row check (primaries quote col 2, aliases have a numeric alt_num there)
 const FILES: [string, string, RegExp][] = [

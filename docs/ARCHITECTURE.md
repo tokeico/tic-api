@@ -76,9 +76,9 @@ src/
 │  ├─ extract.ts            text → Invoice (+ sha256 cache in DB)
 │  └─ memo.ts               Plan → Memo (cited-rule guard, template fallback)
 ├─ db/{index,schema,migrate}.ts   (existing; add tables §11)
-data/   offramps.json · fx.json · sdn.csv · seed/invoices/*.pdf
-scripts/ seed.ts · fixtures.ts (writes fixtures for tic-web) · keys.ts (generates audit keys)
-test/   rules.test.ts · audit.test.ts
+reference/ offramps.json · fx.json · sdn.csv · seed/invoices/*.pdf
+scripts/   seed.ts · fixtures.ts (writes fixtures for tic-web) · keys.ts (generates audit keys)
+test/      rules.test.ts · audit.test.ts
 Dockerfile
 ```
 
@@ -196,7 +196,7 @@ Show the badge "Rules pack v1 · sourced · pending compliance review" in the UI
 
 ## 7. Demo data
 
-**`data/offramps.json`** (fictional providers, labeled demo):
+**`reference/offramps.json`** (fictional providers, labeled demo):
 
 | id | name | country | type | fee | asset/network | rail |
 |---|---|---|---|---|---|---|
@@ -216,7 +216,7 @@ The design means the cheapest option is always non-compliant somewhere:
 
 No demo provider is `vasp_pending`, so BR-VASP-PENDING-WARN and BR-VASP-ART91 never fire on the slider. They cover real-world providers that filed on time.
 
-**`data/fx.json`** (demo rates, labeled): `{ "BRL": 5.40, "MXN": 18.50, "ARS_official": 1518, "ARS_parallel": 1619 }`. The ARS pair is a snapshot from 2026-10-16: `ARS_official` is the BCRA Com. A 3500 wholesale rate and `ARS_parallel` is the USDT/ARS (crypto) rate. That's a 6.7% gap, so AR-FX-SPREAD fires at its 5% threshold. The wire route is always `{ feePct: 4.5, minutes: 2880 }`.
+**`reference/fx.json`** (demo rates, labeled): `{ "BRL": 5.40, "MXN": 18.50, "ARS_official": 1518, "ARS_parallel": 1619 }`. The ARS pair is a snapshot from 2026-10-16: `ARS_official` is the BCRA Com. A 3500 wholesale rate and `ARS_parallel` is the USDT/ARS (crypto) rate. That's a 6.7% gap, so AR-FX-SPREAD fires at its 5% threshold. The wire route is always `{ feePct: 4.5, minutes: 2880 }`.
 
 ## 8. Local LLM (Ollama + Llama)
 

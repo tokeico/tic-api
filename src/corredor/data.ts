@@ -7,8 +7,8 @@
 
 import { z } from "zod";
 import { Offramp, Rule } from "../contracts";
-import offrampsJson from "../../data/offramps.json";
-import fxJson from "../../data/fx.json";
+import offrampsJson from "../../reference/offramps.json";
+import fxJson from "../../reference/fx.json";
 import rulesJson from "./rules/rules.json";
 import { validateCheckParams } from "./rules/checks";
 

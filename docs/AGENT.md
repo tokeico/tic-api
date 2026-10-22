@@ -74,7 +74,7 @@ Agent tab ──POST /api/agent/chat { messages, asOf }──▶ src/llm/agent.t
 6. **lowConfidence is computed, not asked:** a field is flagged when it is missing, fails validation, or isn't found in the PDF text (grounding). The model's own "unsure" list was unreliable.
 7. One transaction: invoice + draft payout + `extracted` audit event (field names only, no identifiers); then the payout is planned.
 
-Demo PDFs: `bun run scripts/demo-pdfs.ts` writes the four demo invoices to `data/invoices/` (byte-stable, so cached extractions keep matching). Uploading them while the seeded demo set exists creates second copies; for a clean upload demo, reset first and upload instead of "Load the demo invoices".
+Demo PDFs: `bun run scripts/demo-pdfs.ts` writes the four demo invoices to `reference/invoices/` (byte-stable, so cached extractions keep matching). Uploading them while the seeded demo set exists creates second copies; for a clean upload demo, reset first and upload instead of "Load the demo invoices".
 
 ## Sanctions sign-off (`POST /api/payouts/:id/sanctions-review`)
 

@@ -19,7 +19,7 @@ let presentationList: ReturnType<typeof loadSdnList> | null = null;
 demoRoutes.get("/screen", async (c) => {
   const name = c.req.query("name")?.trim();
   if (!name || name.length > 200) throw new ApiError(400, "invalid_name", "name is required (max 200 characters).");
-  const list = await (presentationList ??= loadSdnList(fileURLToPath(new URL("../../data/presentation/", import.meta.url))).catch((err) => {
+  const list = await (presentationList ??= loadSdnList(fileURLToPath(new URL("../../reference/presentation/", import.meta.url))).catch((err) => {
     presentationList = null;
     throw err;
   }));

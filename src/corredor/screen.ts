@@ -3,7 +3,7 @@
 //
 // Result: clear, possible_match (with score and matched entry) or hit.
 // A possible_match or hit blocks the payout until a human reviews it (PRD 8.2).
-// Pure once the list is loaded; loading reads the committed snapshot in data/.
+// Pure once the list is loaded; loading reads the committed snapshot in reference/.
 
 import { fileURLToPath } from "node:url";
 import type { ScreeningStatus } from "../contracts";
@@ -239,9 +239,9 @@ export function buildSdnList(sdnCsv: string, altCsv: string | null, version: str
   return { version, entries: entries.filter((e) => e.tokens.length > 0) };
 }
 
-/** Load the committed snapshot (data/sdn.csv + data/alt.csv + data/sdn.meta.json,
+/** Load the committed snapshot (reference/sdn.csv + reference/alt.csv + reference/sdn.meta.json,
  *  plus the consolidated non-SDN lists when scripts/sdn-update.ts fetched them). */
-export async function loadSdnList(dir = fileURLToPath(new URL("../../data/", import.meta.url))): Promise<SdnList> {
+export async function loadSdnList(dir = fileURLToPath(new URL("../../reference/", import.meta.url))): Promise<SdnList> {
   const altFile = Bun.file(`${dir}alt.csv`);
   const consPrimFile = Bun.file(`${dir}cons_prim.csv`);
   const consAltFile = Bun.file(`${dir}cons_alt.csv`);
